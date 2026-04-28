@@ -61,6 +61,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="CleanParam.cs" />
     <Compile Include="CollisionFunctions.cs" />
     <Compile Include="MainPanel.cs" />
     <Compile Include="Form.xaml.cs">
