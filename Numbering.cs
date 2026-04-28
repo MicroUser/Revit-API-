@@ -69,7 +69,7 @@ public class ScheduleElementNumberer
             if (elem == null) continue;
 
             string positionValue = IsRebarShape21(elem)
-                ? $"Ск-{skaboCounter++}"
+                ? $"{skaboCounter++}"
                 : (normalCounter++).ToString();
 
             SetParameter(elem, PositionParamName, positionValue);
@@ -78,11 +78,11 @@ public class ScheduleElementNumberer
 
     private bool IsRebarShape21(Element elem)
     {
-        Parameter shapeParam = elem.LookupParameter(RebarShapeParamName);
+        Parameter shapeParam = elem.get_Parameter(BuiltInParameter.REBAR_SHAPE);
         if (shapeParam == null) return false;
 
         Element shapeElem = _doc.GetElement(shapeParam.AsElementId());
-        return shapeElem?.Name.Trim() == "21";
+        return shapeElem?.Name.Trim() == "(форма)21";
     }
 
     private void SetParameter(Element elem, string paramName, string value)
