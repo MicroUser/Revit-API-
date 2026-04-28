@@ -28,8 +28,9 @@ public class ClearParameterInSchedule : IExternalCommand
             return Result.Failed;
         }
 
+
         // Имя параметра, который нужно очистить
-        string parameterName = "Марка"; // <-- замените на нужное имя
+        string parameterName = "BI_позиция"; // <-- замените на нужное имя
 
         using (Transaction trans = new Transaction(doc, "Очистить параметр"))
         {
@@ -37,30 +38,16 @@ public class ClearParameterInSchedule : IExternalCommand
 
             int clearedCount = 0;
 
+
+
             foreach (ElementId id in selectedIds)
             {
                 Element elem = doc.GetElement(id);
                 if (elem == null) continue;
 
                 Parameter param = elem.LookupParameter(parameterName);
-
-                if (param == null || param.IsReadOnly) continue;
-
-                switch (param.StorageType)
-                {
-                    case StorageType.String:
-                        param.Set(string.Empty);
-                        break;
-                    case StorageType.Integer:
-                        param.Set(0);
-                        break;
-                    case StorageType.Double:
-                        param.Set(0.0);
-                        break;
-                    case StorageType.ElementId:
-                        param.Set(ElementId.InvalidElementId);
-                        break;
-                }
+                if (param == null || param.IsReadOnly);
+                param.Set(string.Empty);
 
                 clearedCount++;
             }
