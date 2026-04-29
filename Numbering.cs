@@ -60,21 +60,41 @@ public class ScheduleElementNumberer
 
     public void Number(ICollection<ElementId> selectedIds)
     {
+        var groups = selectedIds
+            .Select(id => _doc.GetElement(id))
+            .Where(elem => elem != null)
+            .GroupBy(elem => GetGroupingKey(elem))
+            .ToList();
+
         int normalCounter = 1;
         int skaboCounter = 1;
 
-        foreach (ElementId id in selectedIds)
+        foreach (var group in groups)
         {
-            Element elem = _doc.GetElement(id);
-            if (elem == null) continue;
+            bool isSkabo = IsRebarShape21(group.First());
 
-            string positionValue = IsRebarShape21(elem)
+            string positionValue = isSkabo
                 ? $"{skaboCounter++}"
                 : (normalCounter++).ToString();
 
-            SetParameter(elem, PositionParamName, positionValue);
+            foreach (Element elem in group)
+            {
+                SetParameter(elem, PositionParamName, positionValue);
+            }
         }
     }
+
+    // ДОБАВИТЬ (новый метод в класс)
+    private string GetGroupingKey(Element elem)
+    {
+        Element elemType = _doc.GetElement(elem.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).AsElementId());
+
+        string p1 = elemType?.LookupParameter("BI_фильтр_арматуры")?.AsString() ?? "";
+        string p2 = elem.get_Parameter(BuiltInParameter.REBAR_ELEM_LENGTH)?.AsDouble().ToString() ?? "";
+        string p3 = elemType?.LookupParameter("BI_диаметр_арматуры")?.AsDouble().ToString() ?? "";
+
+        return $"{p1}|{p2}|{p3}";
+    }   
 
     private bool IsRebarShape21(Element elem)
     {
