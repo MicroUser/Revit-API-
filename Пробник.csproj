@@ -52,7 +52,7 @@
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Xml" />
     <Reference Include="VCRevitRibbonUtil">
-      <HintPath>..\..\..\..\Downloads\VCRevitRibbonUtil.dll</HintPath>
+      <HintPath>..\..\..\Desktop\C#\C#\Тесты\Пробник\bin\Debug\VCRevitRibbonUtil.dll</HintPath>
     </Reference>
     <Reference Include="WindowsBase" />
     <Reference Include="Пробник, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">

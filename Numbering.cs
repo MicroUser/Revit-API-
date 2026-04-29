@@ -47,7 +47,7 @@ public class NumberScheduleElements : IExternalCommand
 public class ScheduleElementNumberer
 {
     private const string PositionParamName = "BI_позиция";
-    private const string RebarShapeParamName = "Форма арматурного стержня";
+    
 
     private readonly Document _doc;
     private readonly ViewSchedule _schedule;
@@ -66,16 +66,11 @@ public class ScheduleElementNumberer
             .GroupBy(elem => GetGroupingKey(elem))
             .ToList();
 
-        int normalCounter = 1;
-        int skaboCounter = 1;
+        int counter = 1;
 
         foreach (var group in groups)
         {
-            bool isSkabo = IsRebarShape21(group.First());
-
-            string positionValue = isSkabo
-                ? $"{skaboCounter++}"
-                : (normalCounter++).ToString();
+            string positionValue = (counter++).ToString();
 
             foreach (Element elem in group)
             {
@@ -94,16 +89,8 @@ public class ScheduleElementNumberer
         string p3 = elemType?.LookupParameter("BI_диаметр_арматуры")?.AsDouble().ToString() ?? "";
 
         return $"{p1}|{p2}|{p3}";
-    }   
-
-    private bool IsRebarShape21(Element elem)
-    {
-        Parameter shapeParam = elem.get_Parameter(BuiltInParameter.REBAR_SHAPE);
-        if (shapeParam == null) return false;
-
-        Element shapeElem = _doc.GetElement(shapeParam.AsElementId());
-        return shapeElem?.Name.Trim() == "(форма)21";
     }
+
 
     private void SetParameter(Element elem, string paramName, string value)
     {
@@ -111,4 +98,8 @@ public class ScheduleElementNumberer
         if (param == null || param.IsReadOnly) return;
         param.Set(value);
     }
+
+    
+
+
 }
