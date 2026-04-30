@@ -52,8 +52,17 @@ namespace CollisionPlacement
                    (a.Min.Z <= b.Max.Z && a.Max.Z >= b.Min.Z);
         }
 
-        
+        // =====================================================
+        // Дедупликация по расстоянию между точками
+        // =====================================================
 
-        
+        public static bool IsDuplicatePoint(
+            XYZ newPoint,
+            IEnumerable<XYZ> existingPoints,
+            double minDistance = 0.5) // в футах (~15 см)
+        {
+            return existingPoints.Any(p =>
+                p.DistanceTo(newPoint) < minDistance);
+        }
     }
 }
