@@ -2,6 +2,7 @@
 using Пробник.Properties;
 using VCRevitRibbonUtil;   
 
+
 namespace Пробник
 {
 
@@ -12,19 +13,15 @@ namespace Пробник
         {
 
             Ribbon.GetApplicationRibbon(a)
-              .Tab("RAS DVA").Panel("Плагины")
+              .Tab("DAN").Panel("КЖ_Спецификации")
 
-              .CreateButton<ScheduleCreate>("Спецификации", "Создать спецификации для конструкций",
+              .CreateButton<ScheduleMarking>("Спецификации", "Заполнение спецификации каркасов",
               b => b
-              .SetLargeImage(Resources.colli32)
-              .SetSmallImage(Resources.colli16)
+              .SetLargeImage(Resources.cells)
+              .SetSmallImage(Resources.cells
+)
               .SetLongDescription("Создание спецификаций ")
               );
-
-
-
-
-
 
 
 

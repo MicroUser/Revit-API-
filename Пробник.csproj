@@ -78,6 +78,7 @@
     <Compile Include="NametoMark.cs" />
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
+    <Compile Include="ScheduleMarking.cs" />
   </ItemGroup>
   <ItemGroup>
     <Page Include="Form.xaml">
