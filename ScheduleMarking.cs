@@ -10,64 +10,51 @@ using Autodesk.Revit.UI;
 namespace Пробник
 {
     // ─────────────────────────────────────────────────────────────────
-    //  ВСПОМОГАТЕЛЬНЫЙ КЛАСС — логика извлечения и форматирования марки
-    //  Взята из SetViewMark и адаптирована для имён листов
+    //  ВСПОМОГАТЕЛЬНЫЙ КЛАСС — извлечение марок по известному списку
     // ─────────────────────────────────────────────────────────────────
     internal static class SheetMarkHelper
     {
-        // Ищем паттерн: буквы + необязательный разделитель + цифры
-        // Примеры имён листов: "СНм-1 Название", "ЛММ_5 Название", "Пм 2 Название"
-        // Результат:           "СНм-1",           "ЛМм-5",           "Пм-2"
+        // Исчерпывающий список известных марок
+        private static readonly HashSet<string> KnownMarks = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "РТм", "Фм", "СЦм", "СНм", "СЖм", "СШм",
+            "Км", "ЛМм", "ЛПм", "Пм", "ПРПм", "Бм"
+        };
+
+        // Ищем ВСЕ вхождения: буквы + необязательный разделитель + цифры
         private static readonly Regex MarkRegex = new Regex(
             @"([А-Яа-яA-Za-z]+)[\s\-_]?(\d+)",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-        // Исключаем листы типа "Узел 3" — если вдруг такие встречаются
-        private static readonly Regex ExcludeRegex = new Regex(
-            @"^Узел\s+\d+$",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            RegexOptions.Compiled);
 
         /// <summary>
-        /// Извлекает и нормализует марку из имени листа.
-        /// Возвращает null если имя не соответствует паттерну.
-        ///
-        /// Форматирование букв (идентично SetViewMark):
-        ///   2 буквы  → Пм, Км       (первая заглавная, вторая строчная)
-        ///   3+ букв  → ЛМм, СНм     (все кроме последней заглавные, последняя строчная)
-        ///
+        /// Извлекает ВСЕ марки из имени листа, которые входят в KnownMarks.
+        /// Возвращает пустой список если ни одной марки не найдено.
         /// Примеры:
-        ///   "СНм-1 Перекрытие" → "СНм-1"
-        ///   "ЛММ_5 Стена"      → "ЛМм-5"
-        ///   "Пм 2 Колонна"     → "Пм-2"
+        ///   "СНм-1 Перекрытие"      → ["СНм-1"]
+        ///   "СНм-1 СЖм-2 Секция А" → ["СНм-1", "СЖм-2"]
+        ///   "ЛМм_3 Пм-5 Стена"     → ["ЛМм-3", "Пм-5"]
+        ///   "Узел 5 ..."            → []
         /// </summary>
-        public static string ExtractMark(string sheetName)
+        public static List<string> ExtractAllMarks(string sheetName)
         {
+            var result = new List<string>();
+
             if (string.IsNullOrWhiteSpace(sheetName))
-                return null;
+                return result;
 
-            if (ExcludeRegex.IsMatch(sheetName))
-                return null;
-
-            Match match = MarkRegex.Match(sheetName);
-            if (!match.Success)
-                return null;
-
-            string letters = match.Groups[1].Value;
-            string number = match.Groups[2].Value;
-
-            string formatted;
-            if (letters.Length == 2)
+            foreach (Match match in MarkRegex.Matches(sheetName.Trim()))
             {
-                formatted = char.ToUpper(letters[0]) +
-                            letters.Substring(1).ToLower();
-            }
-            else
-            {
-                formatted = letters.Substring(0, letters.Length - 1).ToUpper() +
-                            letters.Substring(letters.Length - 1).ToLower();
+                string letters = match.Groups[1].Value;
+                string number = match.Groups[2].Value;
+
+                if (!KnownMarks.Contains(letters))
+                    continue;
+
+                string canonical = KnownMarks.First(m => string.Equals(m, letters, StringComparison.OrdinalIgnoreCase));
+                result.Add($"{canonical}-{number}");
             }
 
-            return $"{formatted}-{number}";
+            return result;
         }
     }
 
@@ -79,6 +66,7 @@ namespace Пробник
     public class ScheduleMarking : IExternalCommand
     {
         private const string TARGET_PARAM_NAME = "BI_ссылка_на_лист";
+        private const string SHEET_PREFIX = "КЖ";
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -119,7 +107,6 @@ namespace Пробник
 
                     foreach (AssemblyInstance assembly in assemblies)
                     {
-                        // Комментарий сборки должен совпадать с маркой листа — например "СНм-1"
                         string comment = assembly
                             .get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
                             ?.AsString()
@@ -131,7 +118,6 @@ namespace Пробник
                             continue;
                         }
 
-                        // Сравниваем без учёта регистра
                         string matchedKey = markToSheetNumbers.Keys
                             .FirstOrDefault(k => string.Equals(k, comment, StringComparison.OrdinalIgnoreCase));
 
@@ -165,7 +151,6 @@ namespace Пробник
                     tx.Commit();
                 }
 
-                // 4. Отчёт
                 ShowResultDialog(markToSheetNumbers, updatedCount, skippedCount, warnings);
                 return Result.Succeeded;
             }
@@ -178,7 +163,8 @@ namespace Пробник
         }
 
         /// <summary>
-        /// Собирает все листы и группирует номера по марке через SheetMarkHelper.
+        /// Собирает все листы и группирует номера по ВСЕМ найденным маркам.
+        /// Один лист может попасть в несколько марок одновременно.
         /// </summary>
         private Dictionary<string, List<string>> CollectSheetsByMark(Document doc)
         {
@@ -197,26 +183,47 @@ namespace Пробник
                 if (string.IsNullOrEmpty(sheetName) || string.IsNullOrEmpty(sheetNumber))
                     continue;
 
-                string mark = SheetMarkHelper.ExtractMark(sheetName);
-                if (mark == null)
+                // Нормализуем номер листа:
+                //   "045.1" → "45"  (убираем дробную часть и ведущие нули)
+                //   "042"   → "42"  (убираем ведущие нули)
+                //   "125,5" → "125"
+                int dotIndex = sheetNumber.IndexOfAny(new[] { '.', ',' });
+                if (dotIndex > 0)
+                    sheetNumber = sheetNumber.Substring(0, dotIndex);
+                sheetNumber = sheetNumber.TrimStart('0');
+                if (string.IsNullOrEmpty(sheetNumber))
                     continue;
 
-                if (!result.ContainsKey(mark))
-                    result[mark] = new List<string>();
+                List<string> marks = SheetMarkHelper.ExtractAllMarks(sheetName);
 
-                result[mark].Add(sheetNumber);
+                foreach (string mark in marks)
+                {
+                    if (!result.ContainsKey(mark))
+                        result[mark] = new List<string>();
+
+                    if (!result[mark].Contains(sheetNumber))
+                        result[mark].Add(sheetNumber);
+                }
             }
 
             return result;
         }
 
         /// <summary>
-        /// Форматирует список номеров в строку "на листах КЖ - 10...15".
-        /// Два и более подряд идущих числа схлопываются в диапазон через "...".
+        /// Форматирует список номеров листов в строку с префиксом КЖ.
+        ///
+        /// Алгоритм:
+        ///   1. Сортируем числа
+        ///   2. Схлопываем последовательности в диапазоны
+        ///   3. Каждую группу (диапазон или одиночное) предваряем "КЖ "
+        ///   4. Группы соединяем через "; "
+        ///   5. Добавляем префикс "на листах "
+        ///
         /// Примеры:
-        ///   [10,11,12,13,14,15]  → "на листах КЖ - 10...15"
-        ///   [10,11,13,15]        → "на листах КЖ - 10...11, 13, 15"
-        ///   [10]                 → "на листах КЖ - 10"
+        ///   [1..10]          → "на листах КЖ 1...10"
+        ///   [1..10, 12]      → "на листах КЖ 1...10; КЖ 12"
+        ///   [1..10, 12..15]  → "на листах КЖ 1...10; КЖ 12...15"
+        ///   [5]              → "на листах КЖ 5"
         /// </summary>
         private string FormatSheetList(List<string> sheetNumbers)
         {
@@ -233,7 +240,7 @@ namespace Пробник
 
             numeric.Sort();
 
-            var parts = new List<string>();
+            var groups = new List<string>();
             int i = 0;
 
             while (i < numeric.Count)
@@ -247,13 +254,19 @@ namespace Пробник
                     end = numeric[i];
                 }
 
-                parts.Add(end == start ? start.ToString() : $"{start}...{end}");
+                string group = end == start
+                    ? $"{SHEET_PREFIX} - {start}"
+                    : $"{SHEET_PREFIX} - {start}...{end}";
+
+                groups.Add(group);
                 i++;
             }
 
-            parts.AddRange(nonNumeric);
+            // Нечисловые номера добавляем в конец как отдельные группы
+            foreach (string s in nonNumeric)
+                groups.Add($"{SHEET_PREFIX} - {s}");
 
-            return $"на листах КЖ - {string.Join(", ", parts)}";
+            return $"на листах {string.Join("; ", groups)}";
         }
 
         private void ShowResultDialog(
