@@ -12,7 +12,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Xml.Linq;
 
-namespace Пробник
+namespace DAN_Plugin
 {
     [Transaction(TransactionMode.Manual)]
     public class ScheduleCreate : IExternalCommand
@@ -41,7 +41,7 @@ namespace Пробник
 
             if (Executer == false)
             {
-                TaskDialog.Show("Пробник", "Отменено");
+                TaskDialog.Show("DAN_Plugin", "Отменено");
                 return Result.Failed;
             }
 
@@ -58,7 +58,7 @@ namespace Пробник
 
             if (entries.Count == 0)
             {
-                TaskDialog.Show("Пробник", "Не указаны марки конструкций.");
+                TaskDialog.Show("DAN_Plugin", "Не указаны марки конструкций.");
                 return Result.Failed;
             }
 
@@ -96,7 +96,7 @@ namespace Пробник
 
             if (selectedSuffixes.Count == 0)
             {
-                TaskDialog.Show("Пробник", "Не выбран ни один тип спецификации.");
+                TaskDialog.Show("DAN_Plugin", "Не выбран ни один тип спецификации.");
                 return Result.Failed;
             }
 
@@ -116,7 +116,7 @@ namespace Пробник
                     string codePrefix = filterValue.Split(new[] { '-' }, 2)[0].Trim();
 
                     // Определяем базовое имя спецификации по извлечённой первой части
-                    string baseSpecName = "##Пробник";
+                    string baseSpecName = "##DAN_Plugin";
                     if (!string.IsNullOrEmpty(codePrefix) && nameMap.TryGetValue(codePrefix.ToUpperInvariant(), out var mappedName))
                     {
                         baseSpecName = mappedName;

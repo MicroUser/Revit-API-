@@ -13,7 +13,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 
-namespace Пробник
+namespace DAN_Plugin
 {
     /// <summary>
     /// Логика взаимодействия для Form.xaml

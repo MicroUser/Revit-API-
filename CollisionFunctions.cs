@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
 
-namespace CollisionPlacement
+namespace DAN_Plugin
 {
     public static class CollisionFunctions
     {

@@ -6,7 +6,7 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 
-namespace CollisionPlacement
+namespace DAN_Plugin
 {
     [Transaction(TransactionMode.Manual)]
     public class CreateCollisionFamily : IExternalCommand

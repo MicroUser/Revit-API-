@@ -1,9 +1,10 @@
-﻿using Autodesk.Revit.UI;
+﻿/*using Autodesk.Revit.UI;
+using DAN_Plugin.Properties;
 using VCRevitRibbonUtil;   
-using Пробник.Properties;
+using Пробник;
 
 
-namespace Пробник
+namespace DAN_Plugin
 {
 
 
@@ -33,3 +34,4 @@ namespace Пробник
         }
     }
 }
+*/

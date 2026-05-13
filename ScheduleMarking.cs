@@ -7,7 +7,7 @@ using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 
-namespace Пробник
+namespace DAN_Plugin
 {
     // ─────────────────────────────────────────────────────────────────
     //  ВСПОМОГАТЕЛЬНЫЙ КЛАСС — извлечение марок по известному списку
