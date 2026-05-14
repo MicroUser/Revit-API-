@@ -59,6 +59,9 @@ namespace DAN_Plugin
            
         }
 
-        
+        private void Schedule_VM_Checked(object sender, RoutedEventArgs e)
+        {
+
+        }
     }
 }

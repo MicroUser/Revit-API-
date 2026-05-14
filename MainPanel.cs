@@ -1,10 +1,10 @@
-﻿/*using Autodesk.Revit.UI;
-using DAN_Plugin.Properties;
+﻿using Autodesk.Revit.UI;
 using VCRevitRibbonUtil;   
-using Пробник;
+using DAN_Plugin;
+using Пробник.Properties;
 
 
-namespace DAN_Plugin
+namespace Пробник
 {
 
 
@@ -14,15 +14,63 @@ namespace DAN_Plugin
         {
 
             Ribbon.GetApplicationRibbon(a)
-              .Tab("DAN").Panel("КЖ_Спецификации")
+              .Tab("DAN").Panel("КЖ")
 
-              .CreateButton<ScheduleMarking>("Спецификации", "Заполнение спецификации каркасов",
-              b => b
+              .CreateButton<ScheduleMarking>("Спецификация каркасов", "Спецификация каркасов",
+              btn => btn
               .SetLargeImage(Resources.cells)
-              .SetSmallImage(Resources.cells
-)
-              .SetLongDescription("Создание спецификаций ")
-              );
+              .SetSmallImage(Resources.cells)
+              .SetLongDescription("Код ищет в имени листов марки консутрукций и вписывает их сборкам в параметр BI_ссылка_на_лист. " +
+              "Если в проекте нет листа с нужным именем, то в сборку ничего не попадёт")
+              )
+
+            .CreateButton<ScheduleCreate>("Создание спецификации", "Создание спецификации",
+              btn => btn
+              .SetLargeImage(Resources.new_table_32)
+              .SetSmallImage(Resources.new_table_16)
+              .SetLongDescription("Создает спецификацию по вписанной марке конструкции. Можно выбрать какой тип спецификации требуется с помощью кнопок выбора. " +
+              "У спецификации автоматически будет создан фильтр по выбранной марке. ")
+              )
+
+             .CreateSeparator()
+
+             .CreateButton<ClearParameterInSchedule>("Очистка параметров", "Очистка параметра",
+              btn => btn
+              .SetLargeImage(Resources.eraser_32)
+              .SetSmallImage(Resources.eraser_16)
+              .SetLongDescription("У выделенных элементов очищает параметр BI_позиция")
+              )
+
+            /* .CreateButton<NumberScheduleElements>("Нумерация элементов", "Нумерация элементов",
+               btn => btn
+               .SetLargeImage(Resources.pencil_32)
+               .SetSmallImage(Resources.pencil_16)
+               .SetLongDescription("У выделенных элементов нумерует параметр BI_позиция")
+               );*/
+
+            .CreateSeparator()
+
+              .CreateButton<CreateRebarAnnotation>("Аннотация доп. арматуры плит", "Аннотация доп.арм",
+              btn => btn
+              .SetLargeImage(Resources.slab_32)
+              .SetSmallImage(Resources.slab_16)
+              .SetLongDescription("Создает аннотацию для дополнительной арматуры плит по центру")
+              )
+
+
+            .CreateSeparator()
+
+              .CreateButton<AssemblytoElementMark>("Марка из сборки", "Марка из сборки",
+              btn => btn
+              .SetLargeImage(Resources.right_arrow_32)
+              .SetSmallImage(Resources.right_arrow_16)
+              .SetLongDescription($"Передает из сборки параметр <Комментарии> в параметр <Марка> конструкций внутри сборки")
+              )
+
+              .CreateSeparator();
+
+
+
 
 
 
@@ -34,4 +82,3 @@ namespace DAN_Plugin
         }
     }
 }
-*/

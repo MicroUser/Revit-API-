@@ -28,14 +28,16 @@ namespace DAN_Plugin
                 return Result.Failed;
             }
 
+            int groupCount = 0;
+
             using (Transaction trans = new Transaction(doc, "Нумерация элементов"))
             {
                 trans.Start();
-                new ScheduleElementNumberer(doc, schedule).Number(selectedIds);
+                groupCount = new ScheduleElementNumberer(doc, schedule).Number(selectedIds);
                 trans.Commit();
             }
 
-            TaskDialog.Show("Готово", $"Пронумеровано элементов: {selectedIds.Count}");
+            TaskDialog.Show("Готово", $"Пронумеровано позиций: {groupCount}");
             return Result.Succeeded;
         }
     }
@@ -47,7 +49,6 @@ namespace DAN_Plugin
     {
         private const string PositionParamName = "BI_позиция";
 
-
         private readonly Document _doc;
         private readonly ViewSchedule _schedule;
 
@@ -57,7 +58,7 @@ namespace DAN_Plugin
             _schedule = schedule;
         }
 
-        public void Number(ICollection<ElementId> selectedIds)
+        public int Number(ICollection<ElementId> selectedIds)
         {
             var groups = selectedIds
                 .Select(id => _doc.GetElement(id))
@@ -76,9 +77,10 @@ namespace DAN_Plugin
                     SetParameter(elem, PositionParamName, positionValue);
                 }
             }
+
+            return groups.Count;
         }
 
-        // ДОБАВИТЬ (новый метод в класс)
         private string GetGroupingKey(Element elem)
         {
             Element elemType = _doc.GetElement(elem.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).AsElementId());
@@ -90,16 +92,11 @@ namespace DAN_Plugin
             return $"{p1}|{p2}|{p3}";
         }
 
-
         private void SetParameter(Element elem, string paramName, string value)
         {
             Parameter param = elem.LookupParameter(paramName);
             if (param == null || param.IsReadOnly) return;
             param.Set(value);
         }
-
-
-
-
     }
 }

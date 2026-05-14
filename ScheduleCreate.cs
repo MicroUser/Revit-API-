@@ -64,20 +64,33 @@ namespace DAN_Plugin
 
             // Словарь соответствия вводимого кода -> базовое имя спецификации
             var nameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
+{
                 // Стены
-                { "СЖМ", "Стены" },
-                { "СНМ", "Стены" },
-                { "СШМ", "Стены" },
+                { "СЖм", "Стены" },
+                { "СЦм", "Стены" },
+                { "СНм", "Стены" },
 
                 // Плиты
-                { "ПМ", "Плиты" },
-                { "ПРПМ", "Плиты" },
+                { "Пм",   "Плиты" },
+                { "ПРПм", "Плиты" },
+                { "КПТм", "Плиты" },
+
+                // Колонны
+                { "Км", "Колонны" },
+
+                // Балки
+                { "Бм", "Балки" },
 
                 // Фундаменты
-                { "ФМ", "Фундаменты" }
+                { "Фм",  "Фундаменты" },
+                { "РТЛм", "Фундаменты" },
+                { "ФЛм", "Фундаменты" },
+                { "РТм", "Фундаменты" },
 
-                // добавьте другие соответствия по необходимости
+                // Лестницы
+                { "Л",   "Лестницы" },
+                { "ЛМм", "Лестницы" },
+                { "ЛПм", "Лестницы" },
             };
 
             // Сопоставление суффикса -> имя шаблона (измените имена шаблонов под ваш документ)
@@ -85,7 +98,8 @@ namespace DAN_Plugin
             {
                 { "СА", "*(спецификация)СА" },
                 { "ВД", "*(спецификация)ВД" },
-                { "ВРС", "*(спецификация)ВРС" }
+                { "ВРС", "*(спецификация)ВРС" },
+                { "ВМ", "*(спецификация)ВМ(сборка)_АГСК" }
             };
 
             // Собираем выбранные булевы в список суффиксов
@@ -93,7 +107,7 @@ namespace DAN_Plugin
             if (form.Schedule_SA != null && form.Schedule_SA.IsChecked == true) selectedSuffixes.Add("СА");
             if (form.Schedule_VD != null && form.Schedule_VD.IsChecked == true) selectedSuffixes.Add("ВД");
             if (form.Schedule_VRS != null && form.Schedule_VRS.IsChecked == true) selectedSuffixes.Add("ВРС");
-
+            if (form.Schedule_VM != null && form.Schedule_VM.IsChecked == true) selectedSuffixes.Add("ВМ");
             if (selectedSuffixes.Count == 0)
             {
                 TaskDialog.Show("DAN_Plugin", "Не выбран ни один тип спецификации.");
@@ -115,6 +129,18 @@ namespace DAN_Plugin
                     // Извлекаем кодPrefix (часть до дефиса) для маппинга: "СЖм-11" -> "СЖм"
                     string codePrefix = filterValue.Split(new[] { '-' }, 2)[0].Trim();
 
+                    // Ищем совпадение в nameMap без учёта регистра, берём эталонный ключ
+                    string normalizedPrefix = nameMap.Keys
+                        .FirstOrDefault(k => string.Equals(k, codePrefix, StringComparison.OrdinalIgnoreCase));
+
+                    if (normalizedPrefix != null)
+                    {
+                        codePrefix = normalizedPrefix;
+                        // Заменяем префикс в filterValue на эталонный
+                        string suffix2 = filterValue.Substring(codePrefix.Length); // "-111"
+                        filterValue = normalizedPrefix + suffix2; // "Пм-111"
+                    }
+
                     // Определяем базовое имя спецификации по извлечённой первой части
                     string baseSpecName = "##DAN_Plugin";
                     if (!string.IsNullOrEmpty(codePrefix) && nameMap.TryGetValue(codePrefix.ToUpperInvariant(), out var mappedName))
@@ -127,10 +153,21 @@ namespace DAN_Plugin
                         try
                         {
                             // Создаём спецификацию
-                            ViewSchedule schedule = ViewSchedule.CreateSchedule(doc, categoryId);
+                            ViewSchedule schedule = suffix == "ВМ"
+    ? ViewSchedule.CreateMaterialTakeoff(doc, new ElementId(BuiltInCategory.OST_Assemblies))
+    : ViewSchedule.CreateSchedule(doc, categoryId);
 
                             // Формируем имя: базовое имя по первой части + полный введённый код + суффикс
-                            schedule.Name = $"##_{baseSpecName}_{filterValue}_{suffix}";
+                            var suffixNumber = new Dictionary<string, string>
+                                {
+                                    { "СА",  "2" },
+                                    { "ВМ", "3" },
+                                    { "ВД",  "4" },
+                                    { "ВРС", "5" }
+                                };
+
+                            string specNumber = suffixNumber.TryGetValue(suffix, out var num) ? num : "";
+                            schedule.Name = $"({baseSpecName})_{filterValue}_{specNumber}{suffix}";
 
                             // Получаем имя шаблона для данного суффикса (если есть)
                             string templateName = null;
@@ -156,51 +193,85 @@ namespace DAN_Plugin
                             // Обновляем документ чтобы поля шаблона появились в спецификации
                             doc.Regenerate();
 
-                            // Попытка установить параметр спецификации (если параметр доступен)
+
                             try
                             {
-                                var param = schedule.LookupParameter(fieldName);
-                                if (param != null && !string.IsNullOrEmpty(filterValue))
-                                {
-                                    param.Set(filterValue);
-                                }
+                                var markParam = schedule.LookupParameter(fieldName); // BI_марка_конструкции
+                                if (markParam != null && !markParam.IsReadOnly)
+                                    markParam.Set(filterValue);
                             }
-                            catch
+                            catch { }
+
+                            try
                             {
-                                // игнорируем ошибки установки параметра
+                                var groupingParam = schedule.LookupParameter("BI_группирование");
+                                if (groupingParam != null && !groupingParam.IsReadOnly && baseSpecName != "##DAN_Plugin")
+                                    groupingParam.Set(baseSpecName);
                             }
+                            catch { }
+
+                            try
+                            {
+                                var commentParam = schedule.LookupParameter("BI_комментарии_к_виду");
+                                if (commentParam != null && !commentParam.IsReadOnly)
+                                    commentParam.Set(suffix);
+                            }
+                            catch { }
 
                             // Поиск поля в определении и добавление фильтра
                             ScheduleDefinition definition = schedule.Definition;
-                            ScheduleField targetField = null;
 
-                            for (int i = 0; i < definition.GetFieldCount(); i++)
+                            if (suffix == "ВМ")
                             {
-                                ScheduleField field = definition.GetField(i);
-                                if (field.GetName() == fieldName)
+                                ScheduleField commentsField = null;
+                                for (int i = 0; i < definition.GetFieldCount(); i++)
                                 {
-                                    targetField = field;
-                                    break;
+                                    ScheduleField field = definition.GetField(i);
+                                    if (field.GetName() == "Комментарии")
+                                    {
+                                        commentsField = field;
+                                        break;
+                                    }
+                                }
+                                if (commentsField != null)
+                                {
+                                    definition.AddFilter(new ScheduleFilter(
+                                        commentsField.FieldId,
+                                        ScheduleFilterType.Equal,
+                                        filterValue
+                                    ));
                                 }
                             }
-
-                            if (targetField != null && !string.IsNullOrEmpty(filterValue))
+                            else
                             {
-                                ScheduleFilter filter = new ScheduleFilter(
-                                    targetField.FieldId,
-                                    ScheduleFilterType.Equal,
-                                    filterValue
-                                );
-
-                                definition.AddFilter(filter);
+                                // Стандартный фильтр для остальных
+                                ScheduleField targetField = null;
+                                for (int i = 0; i < definition.GetFieldCount(); i++)
+                                {
+                                    ScheduleField field = definition.GetField(i);
+                                    if (field.GetName() == fieldName)
+                                    {
+                                        targetField = field;
+                                        break;
+                                    }
+                                }
+                                if (targetField != null && !string.IsNullOrEmpty(filterValue))
+                                {
+                                    definition.AddFilter(new ScheduleFilter(
+                                        targetField.FieldId,
+                                        ScheduleFilterType.Equal,
+                                        filterValue
+                                    ));
+                                }
                             }
+                        
 
                             createdCount++;
                         }
                         catch (Exception exInner)
                         {
-                            // Продолжаем создавать остальные спецификации, логируем минимально
-                            TaskDialog.Show("Ошибка создания спецификации", $"Вход: '{entry}', Суффикс: '{suffix}'. Ошибка: {exInner.Message}");
+                            TaskDialog.Show("Ошибка создания спецификации",
+                                $"Спецификация {suffix} для марки {filterValue} уже создана.");
                         }
                     }
                 }

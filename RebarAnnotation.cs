@@ -46,13 +46,38 @@ namespace DAN_Plugin
                     .Cast<MultiReferenceAnnotationType>()
                     .Where(x => x.Name == typeBigName || x.Name == typeSmallName)
                     .ToDictionary(x => x.Name, x => x);
-
+            int annotationCount = 0;
             using (Transaction t = new Transaction(doc, "Аннотации арматуры"))
             {
                 t.Start();
 
+                /* Идём через Dimension, т.к. у MultiReferenceAnnotation нет
+                 прямого метода для получения ElementId привязанных стержней*/
+                HashSet<ElementId> annotatedRebarIds = new HashSet<ElementId>();
+
+                var existingAnnotations = new FilteredElementCollector(doc, view.Id)
+                    .OfClass(typeof(MultiReferenceAnnotation))
+                    .Cast<MultiReferenceAnnotation>();
+
+                foreach (MultiReferenceAnnotation mra in existingAnnotations)
+                {
+                    // Получаем привязанный Dimension по DimensionId
+                    Dimension dim = doc.GetElement(mra.DimensionId) as Dimension;
+                    if (dim == null) continue;
+
+                    // Итерируем References размера — каждая несёт ElementId стержня
+                    foreach (Reference r in dim.References)
+                    {
+                        if (r.ElementId != ElementId.InvalidElementId)
+                            annotatedRebarIds.Add(r.ElementId);
+                    }
+                }
+
                 foreach (Rebar rebar in rebars)
                 {
+
+                    if (annotatedRebarIds.Contains(rebar.Id))
+                        continue;
                     // 4. Геометрия — все кривые стержня
                     IList<Curve> curves = rebar.GetCenterlineCurves(
                         false,
@@ -173,6 +198,7 @@ namespace DAN_Plugin
                     try
                     {
                         MultiReferenceAnnotation.Create(doc, view.Id, options);
+                        annotationCount++;
                     }
                     catch
                     {
@@ -182,6 +208,10 @@ namespace DAN_Plugin
 
                 t.Commit();
             }
+
+            TaskDialog.Show(
+                    "Готово",
+                    $"На данном виде создано {annotationCount} аннотаций");
 
             return Result.Succeeded;
         }
