@@ -63,6 +63,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblytoElementMark.cs" />
+    <Compile Include="CreateViewBreak.cs" />
+    <Compile Include="Debug.cs" />
+    <Compile Include="ElevationTag.cs" />
     <Compile Include="Numbering.cs" />
     <Compile Include="CleanParam.cs" />
     <Compile Include="CollisionFunctions.cs" />

@@ -1,0 +1,1 @@
+"command": "dotnet build ${workspaceFolder} -c Release"
