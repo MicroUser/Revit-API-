@@ -23,11 +23,16 @@ namespace DAN_Plugin
             public Reference FaceRef { get; set; }
             public XYZ FacePoint { get; set; }
             public double LeftProj { get; set; }
+            public double RightProj { get; set; }
             public bool IsWall { get; set; }
             public double Z => FacePoint.Z;
         }
 
         private const double ZTolerance = 1.0 / 304.8;
+        private double hiddenZoneBottom = double.MinValue;
+        private double hiddenZoneTop = double.MaxValue;
+        private double globalMinRight = double.MaxValue;
+        private double globalMaxRight = double.MinValue;
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -62,42 +67,118 @@ namespace DAN_Plugin
                 return Result.Failed;
             }
 
-            // Шаг 2: разрыв вида
-            double breakWorldBottom = UnitUtils.ConvertToInternalUnits(28500, UnitTypeId.Millimeters);
-            double breakWorldTop = UnitUtils.ConvertToInternalUnits(50400, UnitTypeId.Millimeters);
+            // Шаг 2: окно настроек
+            var settingsWindow = new SettingsWindow();
+            if (settingsWindow.ShowDialog() != true)
+                return Result.Cancelled;
+
+            bool createBreak = settingsWindow.CreateBreak;
+            bool recreate = settingsWindow.Recreate;
+            List<BreakRange> breakRanges = settingsWindow.BreakRanges;
+
+            // Шаг 3: пересоздание — удаляем существующие разрывы, линии разрыва, отметки и размеры
+            if (recreate)
+            {
+                using (Transaction txRemove = new Transaction(doc, "Удалить разрывы и аннотации"))
+                {
+                    txRemove.Start();
+                    try
+                    {
+                        // Удаляем разрывы вида
+                        var mgrRemove = section.GetCropRegionShapeManager();
+                        if (mgrRemove.Split)
+                            mgrRemove.RemoveSplit();
+
+                        // Удаляем линии разрыва
+                        var breakLineIds = new FilteredElementCollector(doc, section.Id)
+                            .OfClass(typeof(FamilyInstance))
+                            .Cast<FamilyInstance>()
+                            .Where(fi => fi.Symbol.Family.Name.Equals(
+                                "(Оформление) Линия разрыва", StringComparison.OrdinalIgnoreCase))
+                            .Select(fi => fi.Id)
+                            .ToList();
+                        foreach (var id in breakLineIds)
+                            doc.Delete(id);
+
+                        // Удаляем высотные отметки типов BI_стрелка_проектная_вверх/вниз
+                        var spotIds = new FilteredElementCollector(doc, section.Id)
+                            .OfClass(typeof(SpotDimension))
+                            .Cast<SpotDimension>()
+                            .Where(sd =>
+                                sd.SpotDimensionType.Name.Equals("BI_стрелка_проектная_вверх", StringComparison.OrdinalIgnoreCase) ||
+                                sd.SpotDimensionType.Name.Equals("BI_стрелка_проектная_вниз", StringComparison.OrdinalIgnoreCase))
+                            .Select(sd => sd.Id)
+                            .ToList();
+                        foreach (var id in spotIds)
+                            doc.Delete(id);
+
+                        // Удаляем размеры типа BI_основной_2,5мм
+                        var dimIds = new FilteredElementCollector(doc, section.Id)
+                            .OfClass(typeof(Dimension))
+                            .Cast<Dimension>()
+                            .Where(d => d.DimensionType?.Name.Equals(
+                                "BI_основной_2,5мм", StringComparison.OrdinalIgnoreCase) == true)
+                            .Select(d => d.Id)
+                            .ToList();
+                        foreach (var id in dimIds)
+                            doc.Delete(id);
+
+                        txRemove.Commit();
+                    }
+                    catch { txRemove.RollBack(); }
+                }
+            }
+
+            // Шаг 3: разрывы вида
+            double elevationOffset = 0;
+            Level anyLevel = new FilteredElementCollector(doc)
+                .OfClass(typeof(Level))
+                .Cast<Level>()
+                .FirstOrDefault();
+            if (anyLevel != null)
+                elevationOffset = anyLevel.ProjectElevation - anyLevel.Elevation;
 
             var mgr = section.GetCropRegionShapeManager();
-            if (mgr.CanBeSplit)
+            if (createBreak && mgr.CanBeSplit && breakRanges.Any())
             {
-                double regionMin = mgr.GetSplitRegionMinimum(0);
-                double regionMax = mgr.GetSplitRegionMaximum(0);
-                double regionHeight = regionMax - regionMin;
-
                 BoundingBoxXYZ cropBox = section.CropBox;
                 Transform t = cropBox.Transform;
                 double worldBottomZ = Math.Min(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z);
                 double worldHeight = Math.Max(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z) - worldBottomZ;
 
-                double breakLocalBottom = regionMin + (breakWorldBottom - worldBottomZ) / worldHeight * regionHeight;
-                double breakLocalTop = regionMin + (breakWorldTop - worldBottomZ) / worldHeight * regionHeight;
-
-                if (breakLocalBottom > regionMin && breakLocalTop < regionMax && breakLocalBottom < breakLocalTop)
+                using (Transaction txBreak = new Transaction(doc, "Создать разрывы вида"))
                 {
-                    using (Transaction txBreak = new Transaction(doc, "Создать разрыв вида"))
+                    txBreak.Start();
+                    try
                     {
-                        txBreak.Start();
-                        try
+                        // Создаём разрывы от верхнего к нижнему чтобы индексы регионов не смещались
+                        foreach (var range in breakRanges.OrderByDescending(r => r.BottomMm))
                         {
-                            mgr.SplitRegionVertically(0, breakLocalBottom, breakLocalTop);
+                            double breakWorldBottom = UnitUtils.ConvertToInternalUnits(range.BottomMm, UnitTypeId.Millimeters);
+                            double breakWorldTop = UnitUtils.ConvertToInternalUnits(range.TopMm, UnitTypeId.Millimeters);
 
-                            // Включаем отображение границ обрезки если отключены
-                            if (!section.CropBoxActive) section.CropBoxActive = true;
-                            if (!section.CropBoxVisible) section.CropBoxVisible = true;
+                            // Находим регион в который попадает данный разрыв
+                            var mgrCurrent = section.GetCropRegionShapeManager();
+                            int regionIdx = FindRegionForZ(mgrCurrent, breakWorldBottom + elevationOffset, worldBottomZ, worldHeight);
+                            if (regionIdx < 0) continue;
 
-                            txBreak.Commit();
+                            double rMin = mgrCurrent.GetSplitRegionMinimum(regionIdx);
+                            double rMax = mgrCurrent.GetSplitRegionMaximum(regionIdx);
+                            double rHeight = rMax - rMin;
+
+                            double localBottom = rMin + (breakWorldBottom + elevationOffset - worldBottomZ) / worldHeight * rHeight;
+                            double localTop = rMin + (breakWorldTop + elevationOffset - worldBottomZ) / worldHeight * rHeight;
+
+                            if (localBottom > rMin && localTop < rMax && localBottom < localTop)
+                                mgrCurrent.SplitRegionVertically(regionIdx, localBottom, localTop);
                         }
-                        catch { txBreak.RollBack(); }
+
+                        if (!section.CropBoxActive) section.CropBoxActive = true;
+                        if (!section.CropBoxVisible) section.CropBoxVisible = true;
+
+                        txBreak.Commit();
                     }
+                    catch { txBreak.RollBack(); }
                 }
             }
 
@@ -157,9 +238,39 @@ namespace DAN_Plugin
 
             double ProjDepth(XYZ pt) => pt.DotProduct(viewDir);
 
+            // Вычисляем все скрытые зоны из mgr
+            hiddenZoneBottom = double.MinValue;
+            hiddenZoneTop = double.MaxValue;
+            var hiddenZones = new List<(double bottom, double top)>();
+
+            var mgrCheck = section.GetCropRegionShapeManager();
+            if (mgrCheck.Split && mgrCheck.NumberOfSplitRegions >= 2)
+            {
+                BoundingBoxXYZ cb = section.CropBox;
+                Transform ct = cb.Transform;
+                double wBottomZ = Math.Min(ct.OfPoint(cb.Min).Z, ct.OfPoint(cb.Max).Z);
+                double wTopZ = Math.Max(ct.OfPoint(cb.Min).Z, ct.OfPoint(cb.Max).Z);
+                double wHeight = wTopZ - wBottomZ;
+
+                int nRegions = mgrCheck.NumberOfSplitRegions;
+                for (int i = 0; i < nRegions - 1; i++)
+                {
+                    double localBottom = mgrCheck.GetSplitRegionMaximum(i);
+                    double localTop = mgrCheck.GetSplitRegionMinimum(i + 1);
+                    hiddenZones.Add((wBottomZ + localBottom * wHeight, wBottomZ + localTop * wHeight));
+                }
+
+                if (hiddenZones.Any())
+                {
+                    hiddenZoneBottom = hiddenZones.Min(z => z.bottom);
+                    hiddenZoneTop = hiddenZones.Max(z => z.top);
+                }
+            }
+
             // Шаг 5: сбор граней с фильтрацией по скрытой зоне
             var allFaces = new List<FaceData>();
-            double globalMinRight = double.MaxValue;
+            globalMinRight = double.MaxValue;
+            globalMaxRight = double.MinValue;
             double refDepth = 0;
             int depthCnt = 0;
 
@@ -171,12 +282,14 @@ namespace DAN_Plugin
                 foreach (FaceData fd in new[] { topFace, botFace })
                 {
                     if (fd == null) continue;
-                    if (fd.Z > breakWorldBottom && fd.Z < breakWorldTop) continue;
+                    // Пропускаем грани попадающие в любую из скрытых зон
+                    if (hiddenZones.Any(z => fd.Z > z.bottom && fd.Z < z.top)) continue;
 
                     fd.IsWall = isWall;
                     TryAddFace(allFaces, fd);
                     refDepth += ProjDepth(fd.FacePoint); depthCnt++;
                     if (isWall && fd.LeftProj < globalMinRight) globalMinRight = fd.LeftProj;
+                    if (isWall && fd.RightProj > globalMaxRight) globalMaxRight = fd.RightProj;
                 }
             }
 
@@ -196,8 +309,9 @@ namespace DAN_Plugin
 
             double tagProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1000, UnitTypeId.Millimeters);
             double bendGap = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters);
-            double dimProj = globalMinRight - UnitUtils.ConvertToInternalUnits(700, UnitTypeId.Millimeters);
-            double dimOddProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1000, UnitTypeId.Millimeters);
+            double dimProj = globalMinRight - UnitUtils.ConvertToInternalUnits(600, UnitTypeId.Millimeters);
+            double dimOddProj = globalMinRight - UnitUtils.ConvertToInternalUnits(900, UnitTypeId.Millimeters);
+            double dimTotalProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1200, UnitTypeId.Millimeters);
 
             XYZ MakePoint(double rightProj, double depth, double z) =>
                 rightVec.Multiply(rightProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
@@ -255,6 +369,23 @@ namespace DAN_Plugin
                     try { CreateDimensionChain(doc, section, oddFaces, dimOddProj, refDepth, rightVec, viewDir); }
                     catch (Exception ex) { TaskDialog.Show("Предупреждение (нечётные)", ex.Message); }
 
+                // Общий размер от самой нижней до самой верхней грани
+                if (allFaces.Count >= 2)
+                {
+                    var totalFaces = new List<FaceData> { allFaces.First(), allFaces.Last() };
+                    try { CreateDimensionChain(doc, section, totalFaces, dimTotalProj, refDepth, rightVec, viewDir); }
+                    catch (Exception ex) { TaskDialog.Show("Предупреждение (общий размер)", ex.Message); }
+                }
+
+                // Размещаем линии разрыва для всех скрытых зон
+                if (mgrCheck.Split && mgrCheck.NumberOfSplitRegions >= 2)
+                    try { CreateBreakLineAnnotations(doc, section, rightVec, viewDir, hiddenZones); }
+                    catch (Exception ex) { TaskDialog.Show("Предупреждение (линии разрыва)", ex.Message); }
+
+                // Размещаем линии разрыва на плитах только если плита не в скрытой зоне
+                try { CreateFloorBreakLineAnnotations(doc, section, rightVec, viewDir, floors, hiddenZones); }
+                catch (Exception ex) { TaskDialog.Show("Предупреждение (линии плит)", ex.Message); }
+
                 tx.Commit();
             }
 
@@ -264,6 +395,144 @@ namespace DAN_Plugin
             if (skippedCount > 0) resultMsg += $"\nПропущено: {skippedCount}";
             TaskDialog.Show("Готово", resultMsg);
             return Result.Succeeded;
+        }
+
+        private void CreateFloorBreakLineAnnotations(Document doc, ViewSection section,
+            XYZ rightVec, XYZ viewDir, List<Element> floors,
+            List<(double bottom, double top)> hiddenZones)
+        {
+            if (!floors.Any()) return;
+
+            FamilySymbol breakLineSymbol = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .Cast<FamilySymbol>()
+                .FirstOrDefault(fs =>
+                    fs.Family.Name.Equals("(Оформление) Линия разрыва", StringComparison.OrdinalIgnoreCase) &&
+                    fs.Name.Equals("М 1/20", StringComparison.OrdinalIgnoreCase));
+
+            if (breakLineSymbol == null) return;
+            if (!breakLineSymbol.IsActive) breakLineSymbol.Activate();
+
+            double depth = section.Origin.DotProduct(viewDir);
+
+            foreach (Element floor in floors)
+            {
+                GetTopAndBottomFaces(floor, section, rightVec,
+                    out FaceData topFace, out FaceData botFace);
+
+                if (topFace == null || botFace == null) continue;
+
+                double topZ = topFace.Z;
+                double botZ = botFace.Z;
+
+                // Пропускаем плиты у которых верх или низ попадает в скрытую зону
+                if (hiddenZones.Any(z => topZ > z.bottom && topZ < z.top)) continue;
+                if (hiddenZones.Any(z => botZ > z.bottom && botZ < z.top)) continue;
+
+                if (Math.Abs(topZ - botZ) < 1e-6) continue;
+
+                // Края плиты
+                double floorLeftProj = topFace.LeftProj;
+                double floorRightProj = topFace.RightProj;
+
+                // Позиции линий разрыва — 100 мм от края вида
+                BoundingBoxXYZ cropBox = section.CropBox;
+                Transform ct = cropBox.Transform;
+                double offset100 = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+                double leftProj = Math.Min(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
+                                            ct.OfPoint(cropBox.Max).DotProduct(rightVec)) + offset100;
+                double rightProj = Math.Max(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
+                                            ct.OfPoint(cropBox.Max).DotProduct(rightVec)) - offset100;
+
+                XYZ MakePt(double proj, double z) =>
+                    rightVec.Multiply(proj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
+
+                // Левая линия — только если плита выступает левее стены (с допуском 1 мм)
+                double edgeTolerance = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
+                if (floorLeftProj < globalMinRight - edgeTolerance)
+                {
+                    Line lineLeft = Line.CreateBound(MakePt(leftProj, botZ), MakePt(leftProj, topZ));
+                    FamilyInstance leftInst = doc.Create.NewFamilyInstance(lineLeft, breakLineSymbol, section);
+                    if (leftInst != null)
+                    {
+                        XYZ center = MakePt(leftProj, (botZ + topZ) / 2.0);
+                        Plane mirrorPlane = Plane.CreateByNormalAndOrigin(rightVec, center);
+                        ElementTransformUtils.MirrorElement(doc, leftInst.Id, mirrorPlane);
+                        doc.Delete(leftInst.Id);
+                    }
+                }
+
+                // Правая линия — только если плита выступает правее стены (с допуском 1 мм)
+                if (floorRightProj > globalMaxRight + edgeTolerance)
+                {
+                    Line lineRight = Line.CreateBound(MakePt(rightProj, botZ), MakePt(rightProj, topZ));
+                    doc.Create.NewFamilyInstance(lineRight, breakLineSymbol, section);
+                }
+            }
+        }
+
+        private void CreateBreakLineAnnotations(Document doc, ViewSection section,
+            XYZ rightVec, XYZ viewDir, List<(double bottom, double top)> hiddenZones)
+        {
+            FamilySymbol breakLineSymbol = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .Cast<FamilySymbol>()
+                .FirstOrDefault(fs =>
+                    fs.Family.Name.Equals("(Оформление) Линия разрыва", StringComparison.OrdinalIgnoreCase) &&
+                    fs.Name.Equals("М 1/20", StringComparison.OrdinalIgnoreCase));
+
+            if (breakLineSymbol == null)
+            {
+                TaskDialog.Show("Предупреждение", "Семейство не найдено.");
+                return;
+            }
+
+            if (!breakLineSymbol.IsActive) breakLineSymbol.Activate();
+
+            double offset = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters);
+            double depth = section.Origin.DotProduct(viewDir);
+            double leftProj = globalMinRight;
+            double rightProj = globalMaxRight;
+
+            XYZ MakePtLeft(double z) => rightVec.Multiply(leftProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
+            XYZ MakePtRight(double z) => rightVec.Multiply(rightProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
+
+            foreach (var (bottom, top) in hiddenZones)
+            {
+                // Нижний компонент — 200 мм ниже нижней границы зоны (зеркальный)
+                double zBottom = bottom - offset;
+                Line lineBtm = Line.CreateBound(MakePtLeft(zBottom), MakePtRight(zBottom));
+                FamilyInstance btmInst = doc.Create.NewFamilyInstance(lineBtm, breakLineSymbol, section);
+                if (btmInst != null)
+                {
+                    XYZ center = MakePtLeft(zBottom).Add(MakePtRight(zBottom)).Divide(2);
+                    Plane mirrorPlane = Plane.CreateByNormalAndOrigin(XYZ.BasisZ, center);
+                    ElementTransformUtils.MirrorElement(doc, btmInst.Id, mirrorPlane);
+                    doc.Delete(btmInst.Id);
+                }
+
+                // Верхний компонент — 200 мм выше верхней границы зоны
+                double zTop = top + offset;
+                Line lineTop = Line.CreateBound(MakePtLeft(zTop), MakePtRight(zTop));
+                doc.Create.NewFamilyInstance(lineTop, breakLineSymbol, section);
+            }
+        }
+
+        /// <summary>
+        /// Находит индекс региона в который попадает мировая Z-координата.
+        /// </summary>
+        private int FindRegionForZ(dynamic mgr, double worldZ, double worldBottomZ, double worldHeight)
+        {
+            int n = mgr.NumberOfSplitRegions;
+            for (int i = 0; i < n; i++)
+            {
+                double localMin = mgr.GetSplitRegionMinimum(i);
+                double localMax = mgr.GetSplitRegionMaximum(i);
+                double zMin = worldBottomZ + localMin * worldHeight;
+                double zMax = worldBottomZ + localMax * worldHeight;
+                if (worldZ >= zMin && worldZ <= zMax) return i;
+            }
+            return -1;
         }
 
         private void TryAddFace(List<FaceData> list, FaceData fd)
@@ -306,6 +575,7 @@ namespace DAN_Plugin
             double maxZ = double.MinValue;
             double minZ = double.MaxValue;
             double minProj = double.MaxValue;
+            double maxProj = double.MinValue;
 
             foreach (GeometryObject geomObj in geomElem)
             {
@@ -329,6 +599,7 @@ namespace DAN_Plugin
                             {
                                 double proj = pt.DotProduct(rightVec);
                                 if (proj < minProj) minProj = proj;
+                                if (proj > maxProj) maxProj = proj;
                             }
                 }
             }
@@ -341,7 +612,8 @@ namespace DAN_Plugin
                     Elem = elem,
                     FaceRef = topFace.Reference,
                     FacePoint = Center(topFace),
-                    LeftProj = minProj
+                    LeftProj = minProj,
+                    RightProj = maxProj
                 };
             if (botFace != null)
                 botFaceData = new FaceData
@@ -349,7 +621,8 @@ namespace DAN_Plugin
                     Elem = elem,
                     FaceRef = botFace.Reference,
                     FacePoint = Center(botFace),
-                    LeftProj = minProj
+                    LeftProj = minProj,
+                    RightProj = maxProj
                 };
         }
 

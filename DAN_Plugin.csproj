@@ -83,9 +83,16 @@
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
     <Compile Include="ScheduleMarking.cs" />
+    <Compile Include="ElevationTag.xaml.cs">
+      <DependentUpon>ElevationTag.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Page Include="Form.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="ElevationTag.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

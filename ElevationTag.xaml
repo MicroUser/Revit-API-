@@ -1,0 +1,253 @@
+﻿<Window x:Class="DAN_Plugin.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Высотные отметки" Height="560" Width="380"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Background="#F5F5F5"
+        FontFamily="Segoe UI">
+
+    <Window.Resources>
+        <Color x:Key="AccentColor">#2563EB</Color>
+        <Color x:Key="AccentHover">#1D4ED8</Color>
+        <Color x:Key="ErrorColor">#DC2626</Color>
+        <Color x:Key="DangerColor">#EF4444</Color>
+        <SolidColorBrush x:Key="AccentBrush"      Color="{StaticResource AccentColor}"/>
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHover}"/>
+        <SolidColorBrush x:Key="ErrorBrush"       Color="{StaticResource ErrorColor}"/>
+        <SolidColorBrush x:Key="DangerBrush"      Color="{StaticResource DangerColor}"/>
+
+        <Style x:Key="InputStyle" TargetType="TextBox">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="Padding" Value="8 0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="#1F2937"/>
+            <Setter Property="BorderBrush" Value="#D1D5DB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Background" Value="#F3F4F6"/>
+                                <Setter Property="Foreground" Value="#9CA3AF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="Padding" Value="20 0"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{StaticResource AccentHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Background" Value="#93C5FD"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="Padding" Value="20 0"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#374151"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#D1D5DB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#F9FAFB"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="AddButton" TargetType="Button">
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Padding" Value="12 0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Background" Value="#EFF6FF"/>
+            <Setter Property="BorderBrush" Value="#BFDBFE"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#DBEAFE"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ModernCheckBox" TargetType="CheckBox">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="#1F2937"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="Box" Width="18" Height="18" CornerRadius="4"
+                                    BorderBrush="#D1D5DB" BorderThickness="1.5" Background="White">
+                                <Path x:Name="Check" Data="M3,9 L7,13 L15,5"
+                                      Stroke="White" StrokeThickness="2"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter Margin="8 0 0 0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <StackPanel Margin="28">
+
+        <!-- Заголовок -->
+        <TextBlock Text="Настройки" FontSize="20" FontWeight="Bold" Foreground="#111827"/>
+        <TextBlock Text="Высотные отметки и разрывы вида" FontSize="12"
+                   Foreground="#6B7280" Margin="0 4 0 0"/>
+
+        <Border Height="1" Background="#E5E7EB" Margin="0 16 0 16"/>
+
+        <!-- Чекбокс -->
+        <CheckBox x:Name="ChkCreateBreak"
+                  Style="{StaticResource ModernCheckBox}"
+                  Content="Создать разрывы вида"
+                  IsChecked="True"
+                  Checked="ChkCreateBreak_Changed"
+                  Unchecked="ChkCreateBreak_Changed"/>
+
+        <CheckBox x:Name="ChkRecreate"
+                  Style="{StaticResource ModernCheckBox}"
+                  Content="Пересоздать существующие разрывы"
+                  IsChecked="False"
+                  Margin="0 8 0 0"/>
+
+        <!-- Список разрывов -->
+        <StackPanel x:Name="PnlBreaks" Margin="0 12 0 0">
+
+            <!-- Заголовки колонок -->
+            <Grid Margin="0 0 0 4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="32"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Нижняя (мм)" FontSize="11"
+                           Foreground="#6B7280" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="2" Text="Верхняя (мм)" FontSize="11"
+                           Foreground="#6B7280" FontWeight="SemiBold"/>
+            </Grid>
+
+            <!-- Контейнер для строк разрывов -->
+            <StackPanel x:Name="BreakRowsPanel"/>
+
+            <!-- Ошибка валидации -->
+            <Border x:Name="PnlError"
+                    Background="#FEF2F2" BorderBrush="#FECACA"
+                    BorderThickness="1" CornerRadius="6"
+                    Padding="10 7" Margin="0 8 0 0"
+                    Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="⚠ " Foreground="{StaticResource ErrorBrush}" FontSize="12"/>
+                    <TextBlock x:Name="TxtError"
+                               Foreground="{StaticResource ErrorBrush}"
+                               FontSize="12" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Кнопка добавить -->
+            <Button x:Name="BtnAddBreak" Content="+ Добавить разрыв"
+                    Style="{StaticResource AddButton}"
+                    Margin="0 8 0 0" HorizontalAlignment="Left"
+                    Click="BtnAddBreak_Click"/>
+        </StackPanel>
+
+        <!-- Кнопки -->
+        <Grid Margin="0 20 0 0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0" Content="Отмена"
+                    Style="{StaticResource SecondaryButton}"
+                    Click="BtnCancel_Click"/>
+            <Button Grid.Column="2" x:Name="BtnCreate"
+                    Content="Создать"
+                    Style="{StaticResource PrimaryButton}"
+                    Click="BtnCreate_Click"/>
+        </Grid>
+
+    </StackPanel>
+</Window>

@@ -1,48 +1,39 @@
-﻿using System.Reflection;
-using System.Linq;
-using Autodesk.Revit.Attributes;
+﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using System;
+using System.Linq;
 
 namespace DAN_Plugin
 {
     [Transaction(TransactionMode.Manual)]
-    public class DiagnoseSplitOffset : IExternalCommand
+    public class DiagnoseBreakLineFamily : IExternalCommand
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            ViewSection section = commandData.Application.ActiveUIDocument.Document.ActiveView as ViewSection;
-            if (section == null) { TaskDialog.Show("Ошибка", "Нужен разрез."); return Result.Failed; }
+            Document doc = commandData.Application.ActiveUIDocument.Document;
 
-            var mgr = section.GetCropRegionShapeManager();
+            FamilySymbol sym = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .Cast<FamilySymbol>()
+                .FirstOrDefault(fs =>
+                    fs.Family.Name.Equals("(Оформление) Линия разрыва", StringComparison.OrdinalIgnoreCase) &&
+                    fs.Name.Equals("М 1/20", StringComparison.OrdinalIgnoreCase));
 
-            string report = $"Split: {mgr.Split}\n";
-            report += $"NumberOfSplitRegions: {mgr.NumberOfSplitRegions}\n\n";
-
-            for (int i = 0; i < mgr.NumberOfSplitRegions; i++)
+            if (sym == null)
             {
-                var min = mgr.GetSplitRegionMinimum(i);
-                var max = mgr.GetSplitRegionMaximum(i);
-                var offset = mgr.GetSplitRegionOffset(i);
-
-                report += $"Регион {i}:\n";
-                report += $"  Min:    {min}\n";
-                report += $"  Max:    {max}\n";
-                report += $"  Offset: {offset}\n\n";
+                TaskDialog.Show("Ошибка", "Семейство не найдено.");
+                return Result.Failed;
             }
 
-            // Ищем set-методы для offset
-            var setMethods = mgr.GetType()
-                .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Where(m => m.Name.ToLower().Contains("offset") || m.Name.ToLower().Contains("split"))
-                .Select(m => $"{m.ReturnType.Name} {m.Name}({string.Join(", ", m.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"))})");
+            string report =
+                $"Family.Name: {sym.Family.Name}\n" +
+                $"Symbol.Name: {sym.Name}\n" +
+                $"FamilyPlacementType: {sym.Family.FamilyPlacementType}\n" +
+                $"Category: {sym.Category?.Name}\n" +
+                $"IsAnnotation: {sym.Category?.CategoryType == CategoryType.Annotation}\n";
 
-            report += "Методы с offset/split:\n";
-            foreach (var m in setMethods)
-                report += $"  {m}\n";
-
-            if (report.Length > 4000) report = report.Substring(0, 4000) + "\n...(обрезано)";
-            TaskDialog.Show("Split Offset диагностика", report);
+            TaskDialog.Show("Диагностика семейства", report);
             return Result.Succeeded;
         }
     }
