@@ -25,6 +25,7 @@ namespace DAN_Plugin
             public double LeftProj { get; set; }
             public double RightProj { get; set; }
             public bool IsWall { get; set; }
+            public bool IsTop { get; set; }
             public double Z => FacePoint.Z;
         }
 
@@ -141,44 +142,41 @@ namespace DAN_Plugin
             var mgr = section.GetCropRegionShapeManager();
             if (createBreak && mgr.CanBeSplit && breakRanges.Any())
             {
+                var range = breakRanges.First();
+
                 BoundingBoxXYZ cropBox = section.CropBox;
                 Transform t = cropBox.Transform;
                 double worldBottomZ = Math.Min(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z);
-                double worldHeight = Math.Max(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z) - worldBottomZ;
+                double worldTopZ = Math.Max(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z);
+                double worldHeight = worldTopZ - worldBottomZ;
 
-                using (Transaction txBreak = new Transaction(doc, "Создать разрывы вида"))
+                double breakWorldBottom = UnitUtils.ConvertToInternalUnits(range.BottomMm, UnitTypeId.Millimeters);
+                double breakWorldTop = UnitUtils.ConvertToInternalUnits(range.TopMm, UnitTypeId.Millimeters);
+
+                double localBottom = (breakWorldBottom + elevationOffset - worldBottomZ) / worldHeight;
+                double localTop = (breakWorldTop + elevationOffset - worldBottomZ) / worldHeight;
+
+                localBottom = Math.Max(0.001, Math.Min(0.999, localBottom));
+                localTop = Math.Max(0.001, Math.Min(0.999, localTop));
+
+                if (localBottom < localTop)
                 {
-                    txBreak.Start();
-                    try
+                    using (Transaction txBreak = new Transaction(doc, "Создать разрыв вида"))
                     {
-                        // Создаём разрывы от верхнего к нижнему чтобы индексы регионов не смещались
-                        foreach (var range in breakRanges.OrderByDescending(r => r.BottomMm))
+                        txBreak.Start();
+                        try
                         {
-                            double breakWorldBottom = UnitUtils.ConvertToInternalUnits(range.BottomMm, UnitTypeId.Millimeters);
-                            double breakWorldTop = UnitUtils.ConvertToInternalUnits(range.TopMm, UnitTypeId.Millimeters);
-
-                            // Находим регион в который попадает данный разрыв
-                            var mgrCurrent = section.GetCropRegionShapeManager();
-                            int regionIdx = FindRegionForZ(mgrCurrent, breakWorldBottom + elevationOffset, worldBottomZ, worldHeight);
-                            if (regionIdx < 0) continue;
-
-                            double rMin = mgrCurrent.GetSplitRegionMinimum(regionIdx);
-                            double rMax = mgrCurrent.GetSplitRegionMaximum(regionIdx);
-                            double rHeight = rMax - rMin;
-
-                            double localBottom = rMin + (breakWorldBottom + elevationOffset - worldBottomZ) / worldHeight * rHeight;
-                            double localTop = rMin + (breakWorldTop + elevationOffset - worldBottomZ) / worldHeight * rHeight;
-
-                            if (localBottom > rMin && localTop < rMax && localBottom < localTop)
-                                mgrCurrent.SplitRegionVertically(regionIdx, localBottom, localTop);
+                            mgr.SplitRegionVertically(0, localBottom, localTop);
+                            if (!section.CropBoxActive) section.CropBoxActive = true;
+                            if (!section.CropBoxVisible) section.CropBoxVisible = true;
+                            txBreak.Commit();
                         }
-
-                        if (!section.CropBoxActive) section.CropBoxActive = true;
-                        if (!section.CropBoxVisible) section.CropBoxVisible = true;
-
-                        txBreak.Commit();
+                        catch
+                        {
+                            if (txBreak.GetStatus() == TransactionStatus.Started)
+                                txBreak.RollBack();
+                        }
                     }
-                    catch { txBreak.RollBack(); }
                 }
             }
 
@@ -328,9 +326,15 @@ namespace DAN_Plugin
                     FaceData fd = allFaces[i];
                     if (ExistsAtZ(existingZs, fd.Z)) { skippedCount++; continue; }
 
-                    SpotDimensionType typeToUse = (i % 2 == 0)
-                        ? (spotTypeUp ?? spotTypeDown)
-                        : (spotTypeDown ?? spotTypeUp);
+                    SpotDimensionType typeToUse;
+                    if (fd.IsWall)
+                        // Стены: верх → стрелка вниз, низ → стрелка вверх
+                        typeToUse = fd.IsTop
+                            ? (spotTypeDown ?? spotTypeUp)
+                            : (spotTypeUp ?? spotTypeDown);
+                    else
+                        // Плиты: всегда стрелка вверх
+                        typeToUse = spotTypeUp ?? spotTypeDown;
 
                     try
                     {
@@ -389,8 +393,10 @@ namespace DAN_Plugin
                 tx.Commit();
             }
 
-            string resultMsg = $"Сборка: {assembly.Name}\n" +
-                               $"Стен: {walls.Count}, плит: {floors.Count}\n" +
+            string assemblyComment = assembly
+                .get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() ?? assembly.Name;
+
+            string resultMsg = $"Сборка: {assemblyComment}\n" +
                                $"Создано отметок: {createdCount} из {allFaces.Count}";
             if (skippedCount > 0) resultMsg += $"\nПропущено: {skippedCount}";
             TaskDialog.Show("Готово", resultMsg);
@@ -613,7 +619,8 @@ namespace DAN_Plugin
                     FaceRef = topFace.Reference,
                     FacePoint = Center(topFace),
                     LeftProj = minProj,
-                    RightProj = maxProj
+                    RightProj = maxProj,
+                    IsTop = true
                 };
             if (botFace != null)
                 botFaceData = new FaceData
@@ -622,7 +629,8 @@ namespace DAN_Plugin
                     FaceRef = botFace.Reference,
                     FacePoint = Center(botFace),
                     LeftProj = minProj,
-                    RightProj = maxProj
+                    RightProj = maxProj,
+                    IsTop = false
                 };
         }
 
@@ -647,7 +655,7 @@ namespace DAN_Plugin
             Line dimLine = Line.CreateBound(
                 MakePt(sortedFaces.First().Z - pad),
                 MakePt(sortedFaces.Last().Z + pad));
-
+             
             ReferenceArray refArray = new ReferenceArray();
             foreach (FaceData fd in sortedFaces) refArray.Append(fd.FaceRef);
 

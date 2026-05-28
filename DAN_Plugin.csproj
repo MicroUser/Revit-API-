@@ -63,7 +63,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblytoElementMark.cs" />
-    <Compile Include="CreateViewBreak.cs" />
     <Compile Include="Debug.cs" />
     <Compile Include="ElevationTag.cs" />
     <Compile Include="Numbering.cs" />
@@ -78,6 +77,7 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
+    <Compile Include="WallRebarAnnotation.cs" />
     <Compile Include="RebarAnnotation.cs" />
     <Compile Include="NametoMark.cs" />
     <Compile Include="Collisions.cs" />

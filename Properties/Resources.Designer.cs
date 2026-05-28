@@ -73,6 +73,26 @@ namespace Пробник.Properties {
         /// <summary>
         ///   Поиск локализованного ресурса типа System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap dimension_16 {
+            get {
+                object obj = ResourceManager.GetObject("dimension_16", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Поиск локализованного ресурса типа System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap dimension_32 {
+            get {
+                object obj = ResourceManager.GetObject("dimension_32", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Поиск локализованного ресурса типа System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap eraser_16 {
             get {
                 object obj = ResourceManager.GetObject("eraser_16", resourceCulture);

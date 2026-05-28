@@ -1,7 +1,7 @@
 ﻿<Window x:Class="DAN_Plugin.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Высотные отметки" Height="560" Width="380"
+        Title="Высотные отметки" Height="420" Width="360"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         Background="#F5F5F5"
@@ -11,16 +11,14 @@
         <Color x:Key="AccentColor">#2563EB</Color>
         <Color x:Key="AccentHover">#1D4ED8</Color>
         <Color x:Key="ErrorColor">#DC2626</Color>
-        <Color x:Key="DangerColor">#EF4444</Color>
         <SolidColorBrush x:Key="AccentBrush"      Color="{StaticResource AccentColor}"/>
         <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHover}"/>
         <SolidColorBrush x:Key="ErrorBrush"       Color="{StaticResource ErrorColor}"/>
-        <SolidColorBrush x:Key="DangerBrush"      Color="{StaticResource DangerColor}"/>
 
         <Style x:Key="InputStyle" TargetType="TextBox">
-            <Setter Property="Height" Value="34"/>
-            <Setter Property="Padding" Value="8 0"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="Padding" Value="10 0"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Background" Value="White"/>
             <Setter Property="Foreground" Value="#1F2937"/>
@@ -53,8 +51,8 @@
         </Style>
 
         <Style x:Key="PrimaryButton" TargetType="Button">
-            <Setter Property="Height" Value="36"/>
-            <Setter Property="Padding" Value="20 0"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="24 0"/>
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="White"/>
@@ -82,8 +80,8 @@
         </Style>
 
         <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="Height" Value="36"/>
-            <Setter Property="Padding" Value="20 0"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="24 0"/>
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="#374151"/>
@@ -103,35 +101,6 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter Property="Background" Value="#F9FAFB"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="AddButton" TargetType="Button">
-            <Setter Property="Height" Value="32"/>
-            <Setter Property="Padding" Value="12 0"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Background" Value="#EFF6FF"/>
-            <Setter Property="BorderBrush" Value="#BFDBFE"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#DBEAFE"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -173,15 +142,15 @@
 
         <!-- Заголовок -->
         <TextBlock Text="Настройки" FontSize="20" FontWeight="Bold" Foreground="#111827"/>
-        <TextBlock Text="Высотные отметки и разрывы вида" FontSize="12"
+        <TextBlock Text="Высотные отметки и разрыв вида" FontSize="12"
                    Foreground="#6B7280" Margin="0 4 0 0"/>
 
         <Border Height="1" Background="#E5E7EB" Margin="0 16 0 16"/>
 
-        <!-- Чекбокс -->
+        <!-- Чекбоксы -->
         <CheckBox x:Name="ChkCreateBreak"
                   Style="{StaticResource ModernCheckBox}"
-                  Content="Создать разрывы вида"
+                  Content="Создать разрыв вида"
                   IsChecked="True"
                   Checked="ChkCreateBreak_Changed"
                   Unchecked="ChkCreateBreak_Changed"/>
@@ -192,45 +161,39 @@
                   IsChecked="False"
                   Margin="0 8 0 0"/>
 
-        <!-- Список разрывов -->
-        <StackPanel x:Name="PnlBreaks" Margin="0 12 0 0">
+        <!-- Нижняя высота -->
+        <StackPanel x:Name="PnlBreak">
+            <TextBlock Text="Нижняя высота разрыва (мм)" FontSize="12"
+                       Foreground="#374151" FontWeight="SemiBold" Margin="0 16 0 6"/>
+            <TextBox x:Name="TxtBottomHeight" Style="{StaticResource InputStyle}"
+                     Text="30000" TextChanged="Heights_TextChanged"/>
+            <TextBlock x:Name="TxtBottomError"
+                       Foreground="{StaticResource ErrorBrush}"
+                       FontSize="11" Margin="2 4 0 0"
+                       TextWrapping="Wrap" Visibility="Collapsed"/>
 
-            <!-- Заголовки колонок -->
-            <Grid Margin="0 0 0 4">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="8"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="32"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Нижняя (мм)" FontSize="11"
-                           Foreground="#6B7280" FontWeight="SemiBold"/>
-                <TextBlock Grid.Column="2" Text="Верхняя (мм)" FontSize="11"
-                           Foreground="#6B7280" FontWeight="SemiBold"/>
-            </Grid>
+            <TextBlock Text="Верхняя высота разрыва (мм)" FontSize="12"
+                       Foreground="#374151" FontWeight="SemiBold" Margin="0 12 0 6"/>
+            <TextBox x:Name="TxtTopHeight" Style="{StaticResource InputStyle}"
+                     Text="50000" TextChanged="Heights_TextChanged"/>
+            <TextBlock x:Name="TxtTopError"
+                       Foreground="{StaticResource ErrorBrush}"
+                       FontSize="11" Margin="2 4 0 0"
+                       TextWrapping="Wrap" Visibility="Collapsed"/>
 
-            <!-- Контейнер для строк разрывов -->
-            <StackPanel x:Name="BreakRowsPanel"/>
-
-            <!-- Ошибка валидации -->
+            <!-- Общая ошибка -->
             <Border x:Name="PnlError"
                     Background="#FEF2F2" BorderBrush="#FECACA"
                     BorderThickness="1" CornerRadius="6"
-                    Padding="10 7" Margin="0 8 0 0"
+                    Padding="12 8" Margin="0 8 0 0"
                     Visibility="Collapsed">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="⚠ " Foreground="{StaticResource ErrorBrush}" FontSize="12"/>
-                    <TextBlock x:Name="TxtError"
+                    <TextBlock x:Name="TxtGeneralError"
                                Foreground="{StaticResource ErrorBrush}"
                                FontSize="12" TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
-
-            <!-- Кнопка добавить -->
-            <Button x:Name="BtnAddBreak" Content="+ Добавить разрыв"
-                    Style="{StaticResource AddButton}"
-                    Margin="0 8 0 0" HorizontalAlignment="Left"
-                    Click="BtnAddBreak_Click"/>
         </StackPanel>
 
         <!-- Кнопки -->
