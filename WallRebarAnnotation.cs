@@ -83,58 +83,6 @@ public class WallRebarAnnotation : IExternalCommand
 
         Rebar rebar2 = doc.GetElement(ref2.ElementId) as Rebar;
 
-        // ── ШАГ 4: нижняя грань стены ────────────────────────────────────────
-        Reference refWallBottom;
-        try
-        {
-            refWallBottom = uidoc.Selection.PickObject(
-                ObjectType.Face,
-                "Шаг 4 из 7: кликните на нижнюю грань стены");
-        }
-        catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-        {
-            return Result.Cancelled;
-        }
-
-        // ── ШАГ 5: верхняя грань стены ───────────────────────────────────────
-        Reference refWallTop;
-        try
-        {
-            refWallTop = uidoc.Selection.PickObject(
-                ObjectType.Face,
-                "Шаг 5 из 7: кликните на верхнюю грань стены");
-        }
-        catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-        {
-            return Result.Cancelled;
-        }
-
-        // ── ШАГ 6: грань первого крайнего стержня ────────────────────────────
-        Reference refRebarFirst;
-        try
-        {
-            refRebarFirst = uidoc.Selection.PickObject(
-                ObjectType.Face,
-                "Шаг 6 из 7: кликните на грань первого крайнего стержня");
-        }
-        catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-        {
-            return Result.Cancelled;
-        }
-
-        // ── ШАГ 7: грань последнего крайнего стержня ─────────────────────────
-        Reference refRebarLast;
-        try
-        {
-            refRebarLast = uidoc.Selection.PickObject(
-                ObjectType.Face,
-                "Шаг 7 из 7: кликните на грань последнего крайнего стержня");
-        }
-        catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-        {
-            return Result.Cancelled;
-        }
-
         // ── КЭШ ТИПОВ АННОТАЦИЙ ───────────────────────────────────────────────
         string typeBigName = "шаг_количество_длина/поз.(_)";
         string typeSmallName = "шаг_количество_длина/поз.(_)";
@@ -167,11 +115,6 @@ public class WallRebarAnnotation : IExternalCommand
 
             // REBAR 2 → IndependentTag без выноски
             CreateCategoryTag(doc, view, rebar2, ref2, tagHead1, log);
-
-            // РАЗМЕР привязки крайних стержней rebar1 к границам стены-хоста
-            CreateWallBoundaryDimension(doc, view, rebar1, annotationPoint, dimDir1,
-                refWallBottom, refWallTop, refRebarFirst, refRebarLast,
-                rebarDimType, log);
 
             t.Commit();
         }

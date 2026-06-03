@@ -69,12 +69,36 @@ public class CreateRebarAnnotation : IExternalCommand
 
         // Счётчики диагностики
         var skipReasons = new System.Text.StringBuilder();
-        int totalRebars = 0;
-        int skippedRefs = 0;
-        int skippedGrid = 0;
-        int skippedGridRef = 0;
-        int createdDims = 0;
+        int totalRebars = 0;          // стержней, для которых пытались строить размеры до оси
+        int createdDims = 0;          // продольных размеров до оси
+        int createdTransDims = 0;     // поперечных размеров до оси
         int annotationCount = 0;
+
+        // Данные продольных размеров — для дедупликации соседних одинаковых
+        var longRecords = new List<LongRecord>();
+
+        // Размещение поперечного размера: выносится за торец стержней, чтобы его было видно.
+        // true — за дальний конец (по +rebarDir), false — за ближний (по -rebarDir).
+        const bool transverseOnRight = false;
+        // Отступ линии размера от торца стержней
+        double transverseSideMargin = UnitUtils.ConvertToInternalUnits(
+            400, UnitTypeId.Millimeters);
+
+        // Отступ продольного размера от стержня. Линия ставится на этом расстоянии
+        // от торцов, к которым идёт размер, поэтому это же значение = длина выносных
+        // линий ("ножек"). Уменьшайте, чтобы укоротить ножки.
+        double longitudinalOffset = UnitUtils.ConvertToInternalUnits(
+            350, UnitTypeId.Millimeters);
+
+        // Сторона выноса продольного размера за массив: true — за дальний край (+dimDir),
+        // false — за ближний край (-dimDir). Размер привязывается к торцам крайнего
+        // стержня этой стороны, поэтому ножки остаются короткими.
+        const bool longitudinalAbove = true;
+
+        // Во сколько шагов массива допускается разрыв вдоль раскладки, чтобы соседние
+        // массивы одинаковой длины считались одной группой (один продольный размер).
+        // Такой же массив дальше этого разрыва (в другой части) получит свой размер.
+        const double longDedupGapFactor = 3.0;
 
         using (Transaction t = new Transaction(doc, "Аннотации арматуры"))
         {
@@ -100,6 +124,7 @@ public class CreateRebarAnnotation : IExternalCommand
 
                 if (curves.Count == 1 && curves[0] is Line singleLine)
                 {
+                    // Прямой стержень
                     rebarDir = (singleLine.GetEndPoint(1)
                                - singleLine.GetEndPoint(0)).Normalize();
                     midPoint = (singleLine.GetEndPoint(0)
@@ -107,23 +132,48 @@ public class CreateRebarAnnotation : IExternalCommand
                 }
                 else
                 {
-                    XYZ firstPt = curves.First().GetEndPoint(0);
-                    XYZ lastPt = curves.Last().GetEndPoint(1);
-                    XYZ chord = lastPt - firstPt;
-
-                    rebarDir = chord.GetLength() > 1e-6
-                        ? chord.Normalize()
-                        : curves[0].ComputeDerivatives(0.5, true)
-                                   .BasisX.Normalize();
-
-                    var pts = new List<XYZ>();
+                    // Г-образный (и любой составной) стержень: направление берём
+                    // по самому длинному прямому сегменту — это основной ход
+                    // стержня, а не диагональ "первая точка → последняя точка".
+                    Line mainLine = null;
+                    double maxLen = 0;
                     foreach (Curve c in curves)
-                        pts.AddRange(c.Tessellate());
+                    {
+                        if (c is Line ln && ln.Length > maxLen)
+                        {
+                            maxLen = ln.Length;
+                            mainLine = ln;
+                        }
+                    }
 
-                    midPoint = new XYZ(
-                        (pts.Min(p => p.X) + pts.Max(p => p.X)) / 2.0,
-                        (pts.Min(p => p.Y) + pts.Max(p => p.Y)) / 2.0,
-                        (pts.Min(p => p.Z) + pts.Max(p => p.Z)) / 2.0);
+                    if (mainLine != null)
+                    {
+                        rebarDir = (mainLine.GetEndPoint(1)
+                                   - mainLine.GetEndPoint(0)).Normalize();
+                        midPoint = (mainLine.GetEndPoint(0)
+                                   + mainLine.GetEndPoint(1)) / 2.0;
+                    }
+                    else
+                    {
+                        // Запасной вариант — по хорде (если прямых сегментов нет)
+                        XYZ firstPt = curves.First().GetEndPoint(0);
+                        XYZ lastPt = curves.Last().GetEndPoint(1);
+                        XYZ chord = lastPt - firstPt;
+
+                        rebarDir = chord.GetLength() > 1e-6
+                            ? chord.Normalize()
+                            : curves[0].ComputeDerivatives(0.5, true)
+                                       .BasisX.Normalize();
+
+                        var pts = new List<XYZ>();
+                        foreach (Curve c in curves)
+                            pts.AddRange(c.Tessellate());
+
+                        midPoint = new XYZ(
+                            (pts.Min(p => p.X) + pts.Max(p => p.X)) / 2.0,
+                            (pts.Min(p => p.Y) + pts.Max(p => p.Y)) / 2.0,
+                            (pts.Min(p => p.Z) + pts.Max(p => p.Z)) / 2.0);
+                    }
                 }
 
                 // dimDir — направление распределения массива
@@ -183,118 +233,9 @@ public class CreateRebarAnnotation : IExternalCommand
                     continue;
                 }
 
-                // 11. РАЗМЕР МЕЖДУ КРАЙНИМИ СТЕРЖНЯМИ В МАССИВЕ (продольный)
-                if (count >= 2 && spacing > 0)
-                {
-                    try
-                    {
-                        IList<Curve> firstBarCurves = rebar.GetCenterlineCurves(
-                            false, false, false,
-                            MultiplanarOption.IncludeOnlyPlanarCurves, 0);
-                        IList<Curve> lastBarCurves = rebar.GetCenterlineCurves(
-                            false, false, false,
-                            MultiplanarOption.IncludeOnlyPlanarCurves, count - 1);
-
-                        if (firstBarCurves?.Count > 0 && lastBarCurves?.Count > 0)
-                        {
-                            XYZ firstBarMid = GetCurvesMidPoint(firstBarCurves);
-                            XYZ lastBarMid = GetCurvesMidPoint(lastBarCurves);
-                            XYZ spreadDir = lastBarMid - firstBarMid;
-
-                            if (spreadDir.GetLength() > 1e-6)
-                            {
-                                spreadDir = spreadDir.Normalize();
-
-                                XYZ spanDimDir = spreadDir
-                                    .CrossProduct(view.ViewDirection).Normalize();
-
-                                double spanDimOffset = UnitUtils.ConvertToInternalUnits(
-                                    50, UnitTypeId.Millimeters);
-
-                                XYZ spanMid = (firstBarMid + lastBarMid) / 2.0;
-                                XYZ dimLinePos = spanMid + spanDimDir * spanDimOffset;
-
-                                double spanLengthMm = UnitUtils.ConvertFromInternalUnits(
-                                    (lastBarMid - firstBarMid).GetLength(),
-                                    UnitTypeId.Millimeters);
-                                if (spanLengthMm < 1.0)
-                                    goto SkipToStep12;
-
-                                Options geomOptions = new Options
-                                {
-                                    View = view,
-                                    ComputeReferences = true
-                                };
-
-                                double firstProj = firstBarMid.DotProduct(spreadDir);
-                                double lastProj = lastBarMid.DotProduct(spreadDir);
-                                double tolerance = UnitUtils.ConvertToInternalUnits(
-                                    5, UnitTypeId.Millimeters);
-
-                                Reference refFirst = null;
-                                Reference refLast = null;
-
-                                foreach (GeometryObject geomObj in
-                                    rebar.get_Geometry(geomOptions))
-                                {
-                                    IEnumerable<GeometryObject> candidates =
-                                        geomObj is GeometryInstance gi
-                                            ? gi.GetInstanceGeometry()
-                                            : Enumerable.Repeat(geomObj, 1);
-
-                                    foreach (GeometryObject candidate in candidates)
-                                    {
-                                        if (!(candidate is Curve geomCurve)) continue;
-
-                                        XYZ curveMid = geomCurve.Evaluate(0.5, true);
-                                        double proj = curveMid.DotProduct(spreadDir);
-
-                                        if (refFirst == null &&
-                                            Math.Abs(proj - firstProj) < tolerance)
-                                            refFirst = geomCurve.Reference;
-                                        else if (refLast == null &&
-                                                 Math.Abs(proj - lastProj) < tolerance)
-                                            refLast = geomCurve.Reference;
-
-                                        if (refFirst != null && refLast != null) break;
-                                    }
-
-                                    if (refFirst != null && refLast != null) break;
-                                }
-
-                                if (refFirst != null && refLast != null)
-                                {
-                                    XYZ p1 = new XYZ(
-                                        (dimLinePos - spreadDir * 1.0).X,
-                                        (dimLinePos - spreadDir * 1.0).Y,
-                                        view.Origin.Z);
-                                    XYZ p2 = new XYZ(
-                                        (dimLinePos + spreadDir * 1.0).X,
-                                        (dimLinePos + spreadDir * 1.0).Y,
-                                        view.Origin.Z);
-                                    Line dimensionLine = Line.CreateBound(p1, p2);
-
-                                    var ra = new ReferenceArray();
-                                    ra.Append(refFirst);
-                                    ra.Append(refLast);
-
-                                    if (rebarDimType != null)
-                                        doc.Create.NewDimension(
-                                            view, dimensionLine, ra, rebarDimType);
-                                    else
-                                        doc.Create.NewDimension(
-                                            view, dimensionLine, ra);
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                }
-
-            SkipToStep12:
-
-                // 12. ПРОДОЛЬНЫЙ РАЗМЕР ДО БЛИЖАЙШЕЙ ОСИ
-                // Цепочка: ось → конец стержня → конец стержня
+                // 11. ПРОДОЛЬНЫЙ РАЗМЕР ДО БЛИЖАЙШЕЙ ОСИ
+                // Размер идёт вдоль rebarDir (вдоль стержней).
+                // Цепочка: ось → конец стержня → конец стержня.
                 if (grids.Count > 0)
                 {
                     try
@@ -321,39 +262,52 @@ public class CreateRebarAnnotation : IExternalCommand
 
                         if (rebarLineRefs.Count == 0)
                         {
-                            skippedRefs++;
                             skipReasons.AppendLine(
-                                $"Rebar {rebar.Id}: нет Line-References");
+                                $"Rebar {rebar.Id}: продол. — нет Line-References");
                         }
                         else
                         {
-                            // Ищем торцевые линии (перпендикулярные rebarDir)
+                            // Торцевые линии (перпендикулярные rebarDir) с уровнем вдоль dimDir
                             Reference refEnd0 = null;
                             Reference refEnd1 = null;
                             XYZ ptEnd0 = null;
                             XYZ ptEnd1 = null;
 
+                            var endLines = new List<(Reference reference, XYZ mid, double level)>();
                             foreach (var (ln, rf) in rebarLineRefs)
                             {
                                 XYZ lnDir = (ln.GetEndPoint(1)
                                                - ln.GetEndPoint(0)).Normalize();
-                                double dot = Math.Abs(lnDir.DotProduct(rebarDir));
-
-                                if (dot < 0.3)
+                                if (Math.Abs(lnDir.DotProduct(rebarDir)) < 0.3)
                                 {
                                     XYZ lnMid = (ln.GetEndPoint(0)
                                                 + ln.GetEndPoint(1)) / 2.0;
-                                    if (refEnd0 == null)
-                                    {
-                                        refEnd0 = rf;
-                                        ptEnd0 = lnMid;
-                                    }
-                                    else if (refEnd1 == null)
-                                    {
-                                        refEnd1 = rf;
-                                        ptEnd1 = lnMid;
-                                        break;
-                                    }
+                                    endLines.Add((rf, lnMid, lnMid.DotProduct(dimDir)));
+                                }
+                            }
+
+                            if (endLines.Count >= 2)
+                            {
+                                // Уровень КРАЙНЕГО стержня на выбранной стороне массива
+                                double edgeLevel = longitudinalAbove
+                                    ? endLines.Max(e => e.level)
+                                    : endLines.Min(e => e.level);
+
+                                double lvlTol = UnitUtils.ConvertToInternalUnits(
+                                    5, UnitTypeId.Millimeters);
+
+                                // Два торца крайнего стержня (его концы вдоль rebarDir)
+                                var edgeEnds = endLines
+                                    .Where(e => Math.Abs(e.level - edgeLevel) < lvlTol)
+                                    .OrderBy(e => e.mid.DotProduct(rebarDir))
+                                    .ToList();
+
+                                if (edgeEnds.Count >= 2)
+                                {
+                                    refEnd0 = edgeEnds.First().reference;
+                                    ptEnd0 = edgeEnds.First().mid;
+                                    refEnd1 = edgeEnds.Last().reference;
+                                    ptEnd1 = edgeEnds.Last().mid;
                                 }
                             }
 
@@ -373,7 +327,7 @@ public class CreateRebarAnnotation : IExternalCommand
 
                             if (refEnd0 != null && refEnd1 != null)
                             {
-                                // Ближайшая ось перпендикулярная rebarDir
+                                // Ближайшая ось, перпендикулярная rebarDir
                                 Grid nearestGrid = null;
                                 double minDist = double.MaxValue;
 
@@ -404,22 +358,14 @@ public class CreateRebarAnnotation : IExternalCommand
 
                                 if (nearestGrid == null)
                                 {
-                                    skippedGrid++;
                                     skipReasons.AppendLine(
-                                        $"Rebar {rebar.Id}: нет перп. оси.");
+                                        $"Rebar {rebar.Id}: продол. — нет перп. оси");
                                 }
                                 else
                                 {
-                                    Options geomOpts12 = new Options
-                                    {
-                                        View = view,
-                                        ComputeReferences = true,
-                                        IncludeNonVisibleObjects = true
-                                    };
-
                                     Reference refGrid = null;
                                     foreach (GeometryObject go in
-                                        nearestGrid.get_Geometry(geomOpts12))
+                                        nearestGrid.get_Geometry(geomOpts))
                                     {
                                         if (go is Line gridLine
                                             && gridLine.Reference != null)
@@ -433,9 +379,8 @@ public class CreateRebarAnnotation : IExternalCommand
 
                                     if (refGrid == null)
                                     {
-                                        skippedGridRef++;
                                         skipReasons.AppendLine(
-                                            $"Rebar {rebar.Id}: нет Reference оси.");
+                                            $"Rebar {rebar.Id}: продол. — нет Reference оси");
                                     }
                                     else
                                     {
@@ -455,53 +400,34 @@ public class CreateRebarAnnotation : IExternalCommand
 
                                         if (!(distEnd0Mm < 1.0 && distEnd1Mm < 1.0))
                                         {
-                                            double gridDimOffset =
-                                                UnitUtils.ConvertToInternalUnits(
-                                                    100, UnitTypeId.Millimeters);
-
-                                            XYZ midProjected = new XYZ(
-                                                midPoint.X, midPoint.Y, view.Origin.Z);
-                                            XYZ dimLineMid = midProjected
-                                                           + dimDir * gridDimOffset;
-
-                                            Line dimLine = Line.CreateBound(
-                                                new XYZ(
-                                                    (dimLineMid - rebarDir * 2.0).X,
-                                                    (dimLineMid - rebarDir * 2.0).Y,
-                                                    view.Origin.Z),
-                                                new XYZ(
-                                                    (dimLineMid + rebarDir * 2.0).X,
-                                                    (dimLineMid + rebarDir * 2.0).Y,
-                                                    view.Origin.Z));
-
-                                            var chainRa = new ReferenceArray();
-
-                                            if (distEnd0Mm < 1.0)
+                                            // Не создаём размер сразу — копим данные,
+                                            // чтобы после цикла убрать дубли для соседних
+                                            // массивов одинаковой длины и привязки.
+                                            longRecords.Add(new LongRecord
                                             {
-                                                chainRa.Append(refGrid);
-                                                chainRa.Append(refEnd1);
-                                            }
-                                            else if (distEnd1Mm < 1.0)
-                                            {
-                                                chainRa.Append(refGrid);
-                                                chainRa.Append(refEnd0);
-                                            }
-                                            else
-                                            {
-                                                chainRa.Append(refGrid);
-                                                chainRa.Append(refEnd0);
-                                                chainRa.Append(refEnd1);
-                                            }
-
-                                            if (rebarDimType != null)
-                                                doc.Create.NewDimension(
-                                                    view, dimLine, chainRa,
-                                                    rebarDimType);
-                                            else
-                                                doc.Create.NewDimension(
-                                                    view, dimLine, chainRa);
-
-                                            createdDims++;
+                                                GridId = nearestGrid.Id,
+                                                GridRef = refGrid,
+                                                End0Ref = refEnd0,
+                                                End1Ref = refEnd1,
+                                                PtEnd0 = ptEnd0,
+                                                PtEnd1 = ptEnd1,
+                                                Dist0Mm = distEnd0Mm,
+                                                Dist1Mm = distEnd1Mm,
+                                                End0Proj = ptEnd0.DotProduct(rebarDir),
+                                                End1Proj = ptEnd1.DotProduct(rebarDir),
+                                                EdgeLevel =
+                                                    (ptEnd0.DotProduct(dimDir)
+                                                     + ptEnd1.DotProduct(dimDir)) / 2.0,
+                                                Lo = endLines.Count > 0
+                                                    ? endLines.Min(e => e.level)
+                                                    : ptEnd0.DotProduct(dimDir),
+                                                Hi = endLines.Count > 0
+                                                    ? endLines.Max(e => e.level)
+                                                    : ptEnd0.DotProduct(dimDir),
+                                                DimDir = dimDir,
+                                                RebarDir = rebarDir,
+                                                Spacing = spacing
+                                            });
                                         }
                                     }
                                 }
@@ -511,13 +437,15 @@ public class CreateRebarAnnotation : IExternalCommand
                     catch (Exception ex)
                     {
                         skipReasons.AppendLine(
-                            $"Rebar {rebar.Id}: exception — {ex.Message}");
+                            $"Rebar {rebar.Id}: продол. — {ex.Message}");
                     }
                 }
 
-                // 13. ПОПЕРЕЧНЫЙ РАЗМЕР ДО БЛИЖАЙШЕЙ ОСИ
-                // Цепочка: ось → первый крайний стержень → последний крайний стержень
-                // Ось параллельна dimDir (направлению распределения массива)
+                // 12. ПОПЕРЕЧНЫЙ РАЗМЕР ДО БЛИЖАЙШЕЙ ОСИ
+                // Размер идёт вдоль dimDir (направление раскладки массива).
+                // Цепочка: ближайшая ось (перпендикулярная dimDir) → крайние стержни.
+                // Заменяет прежний "размер между крайними стержнями":
+                // межстержневой размер уже входит сегментом в эту цепочку.
                 if (count < 2 || spacing <= 0 || grids.Count == 0)
                     continue;
 
@@ -530,52 +458,83 @@ public class CreateRebarAnnotation : IExternalCommand
                         IncludeNonVisibleObjects = true
                     };
 
-                    // Физические позиции крайних стержней вдоль dimDir
-                    double halfSpan = (count - 1) * spacing / 2.0;
-                    XYZ firstMidT = midPoint - dimDir * halfSpan;
-                    XYZ lastMidT = midPoint + dimDir * halfSpan;
+                    // Все линии стержня, параллельные rebarDir (осевые + кромки): при показе
+                    // арматуры телом видны кромки сечения, а осевые приходят как невидимые
+                    // объекты благодаря IncludeNonVisibleObjects. Нужную осевую выберем ниже
+                    // по близости к расчётному центру стержня (кромки смещены на ±радиус).
+                    // Отгибы г-образных стержней перпендикулярны rebarDir и сюда не попадают.
+                    var barLines = new List<(Reference reference, double proj)>();
 
-                    // References крайних стержней — проецируем на dimDir
-                    double firstProjT = firstMidT.DotProduct(dimDir);
-                    double lastProjT = lastMidT.DotProduct(dimDir);
-                    double toleranceT = UnitUtils.ConvertToInternalUnits(
-                        5, UnitTypeId.Millimeters);
+                    // Габарит поля стержней вдоль rebarDir (для выноса размера за торец)
+                    double rebarMin = double.MaxValue;
+                    double rebarMax = double.MinValue;
 
-                    Reference refFirstT = null;
-                    Reference refLastT = null;
-
-                    foreach (GeometryObject geomObj in rebar.get_Geometry(geomOptsT))
+                    foreach (GeometryObject go in rebar.get_Geometry(geomOptsT))
                     {
-                        IEnumerable<GeometryObject> candidates =
-                            geomObj is GeometryInstance giT
+                        IEnumerable<GeometryObject> objs =
+                            go is GeometryInstance giT
                                 ? giT.GetInstanceGeometry()
-                                : Enumerable.Repeat(geomObj, 1);
+                                : Enumerable.Repeat(go, 1);
 
-                        foreach (GeometryObject candidate in candidates)
+                        foreach (GeometryObject o in objs)
                         {
-                            if (!(candidate is Curve geomCurve)) continue;
+                            if (!(o is Line ln) || ln.Reference == null) continue;
 
-                            XYZ cm = geomCurve.Evaluate(0.5, true);
-                            double proj = cm.DotProduct(dimDir);
+                            XYZ lnDir = (ln.GetEndPoint(1)
+                                           - ln.GetEndPoint(0)).Normalize();
+                            // только продольные линии (вдоль rebarDir)
+                            if (Math.Abs(lnDir.DotProduct(rebarDir)) < 0.9) continue;
 
-                            if (refFirstT == null &&
-                                Math.Abs(proj - firstProjT) < toleranceT)
-                                refFirstT = geomCurve.Reference;
-                            else if (refLastT == null &&
-                                     Math.Abs(proj - lastProjT) < toleranceT)
-                                refLastT = geomCurve.Reference;
+                            XYZ lnMid = (ln.GetEndPoint(0) + ln.GetEndPoint(1)) / 2.0;
+                            barLines.Add((ln.Reference, lnMid.DotProduct(dimDir)));
 
-                            if (refFirstT != null && refLastT != null) break;
+                            double e0 = ln.GetEndPoint(0).DotProduct(rebarDir);
+                            double e1 = ln.GetEndPoint(1).DotProduct(rebarDir);
+                            rebarMin = Math.Min(rebarMin, Math.Min(e0, e1));
+                            rebarMax = Math.Max(rebarMax, Math.Max(e0, e1));
                         }
-
-                        if (refFirstT != null && refLastT != null) break;
                     }
 
-                    if (refFirstT == null || refLastT == null)
+                    if (barLines.Count < 2)
+                    {
+                        skipReasons.AppendLine(
+                            $"Rebar {rebar.Id}: попереч. — не найдены осевые линии стержней");
                         continue;
+                    }
 
-                    // Ближайшая ось параллельная dimDir
-                    // dot(gridDir, dimDir) > 0.7
+                    // Центры крайних стержней массива вычисляем из самих линий, НЕ через
+                    // индекс стержня (GetCenterlineCurves с индексом нестабилен и может
+                    // вернуть один и тот же стержень). Крайние кромки дают габарит массива,
+                    // а центр каждого крайнего стержня лежит внутрь на радиус.
+                    double barRadius = 0;
+                    RebarBarType barType = doc.GetElement(rebar.GetTypeId()) as RebarBarType;
+                    if (barType != null)
+                        barRadius = barType.BarModelDiameter / 2.0;
+
+                    double pMin = barLines.Min(b => b.proj);
+                    double pMax = barLines.Max(b => b.proj);
+                    double firstTarget = pMin + barRadius;
+                    double lastTarget = pMax - barRadius;
+
+                    // Из всех линий берём ближайшую к центру — это осевая, а не кромка
+                    var firstBar = barLines
+                        .OrderBy(b => Math.Abs(b.proj - firstTarget)).First();
+                    var lastBar = barLines
+                        .OrderBy(b => Math.Abs(b.proj - lastTarget)).First();
+
+                    // Подстраховка: если выбрался один и тот же стержень — берём
+                    // самую дальнюю от него осевую как второй край
+                    if (Math.Abs(firstBar.proj - lastBar.proj) < 1e-6)
+                        lastBar = barLines
+                            .OrderByDescending(b => Math.Abs(b.proj - firstBar.proj))
+                            .First();
+
+                    Reference refFirstT = firstBar.reference;
+                    Reference refLastT = lastBar.reference;
+                    double firstPosT = firstBar.proj;
+                    double lastPosT = lastBar.proj;
+
+                    // Ближайшая ось, ПЕРПЕНДИКУЛЯРНАЯ dimDir (расстояние меряем вдоль dimDir)
                     Grid nearestGridT = null;
                     double minDistT = double.MaxValue;
 
@@ -586,16 +545,11 @@ public class CreateRebarAnnotation : IExternalCommand
 
                         XYZ gridDir = (gridCurve.GetEndPoint(1)
                                          - gridCurve.GetEndPoint(0)).Normalize();
-                        double dot = Math.Abs(gridDir.DotProduct(dimDir));
+                        if (Math.Abs(gridDir.DotProduct(dimDir)) > 0.3) continue;
 
-                        // Только параллельные dimDir
-                        if (dot < 0.7) continue;
-
-                        // Расстояние вдоль rebarDir от стержня до оси
-                        double gridProj = gridCurve.GetEndPoint(0)
-                                                   .DotProduct(rebarDir);
-                        double barProj = midPoint.DotProduct(rebarDir);
-                        double dist = Math.Abs(barProj - gridProj);
+                        double dist = Math.Abs(
+                            gridCurve.GetEndPoint(0).DotProduct(dimDir)
+                            - midPoint.DotProduct(dimDir));
 
                         if (dist < minDistT)
                         {
@@ -605,9 +559,12 @@ public class CreateRebarAnnotation : IExternalCommand
                     }
 
                     if (nearestGridT == null)
+                    {
+                        skipReasons.AppendLine(
+                            $"Rebar {rebar.Id}: попереч. — нет оси, перпендикулярной раскладке");
                         continue;
+                    }
 
-                    // Reference на ось
                     Reference refGridT = null;
                     foreach (GeometryObject go in nearestGridT.get_Geometry(geomOptsT))
                     {
@@ -619,105 +576,198 @@ public class CreateRebarAnnotation : IExternalCommand
                     }
                     if (refGridT == null)
                         refGridT = new Reference(nearestGridT);
-
                     if (refGridT == null)
+                    {
+                        skipReasons.AppendLine(
+                            $"Rebar {rebar.Id}: попереч. — нет Reference оси");
                         continue;
+                    }
 
-                    // Расстояния от крайних стержней до оси вдоль rebarDir
-                    double gridProjValueT = nearestGridT.Curve
-                        .GetEndPoint(0).DotProduct(rebarDir);
-
+                    // Положение оси вдоль dimDir
+                    double gridPos = nearestGridT.Curve
+                        .GetEndPoint(0).DotProduct(dimDir);
                     double distFirstMm = UnitUtils.ConvertFromInternalUnits(
-                        Math.Abs(firstMidT.DotProduct(rebarDir) - gridProjValueT),
-                        UnitTypeId.Millimeters);
+                        Math.Abs(firstPosT - gridPos), UnitTypeId.Millimeters);
                     double distLastMm = UnitUtils.ConvertFromInternalUnits(
-                        Math.Abs(lastMidT.DotProduct(rebarDir) - gridProjValueT),
-                        UnitTypeId.Millimeters);
+                        Math.Abs(lastPosT - gridPos), UnitTypeId.Millimeters);
 
-                    // Если оба на оси — пропускаем
+                    // Оба крайних стержня на оси — нечего мерить
                     if (distFirstMm < 1.0 && distLastMm < 1.0)
                         continue;
 
-                    // Линия размера вдоль dimDir, отступает вдоль rebarDir
-                    double transOffset = UnitUtils.ConvertToInternalUnits(
-                        100, UnitTypeId.Millimeters);
-
-                    XYZ transMid = midPoint + rebarDir * transOffset;
+                    // Линию размера выносим за торец стержней (вбок), чтобы её было
+                    // видно: к нужному концу поля вдоль rebarDir + отступ.
+                    // transverseOnRight: true — за дальний конец (+rebarDir),
+                    // false — за ближний (-rebarDir).
+                    double targetRebarProj = transverseOnRight
+                        ? rebarMax + transverseSideMargin
+                        : rebarMin - transverseSideMargin;
+                    double shift = targetRebarProj - midPoint.DotProduct(rebarDir);
+                    XYZ transMid = midPoint + rebarDir * shift;
                     XYZ dimLineMidT = new XYZ(transMid.X, transMid.Y, view.Origin.Z);
 
                     Line dimLineT = Line.CreateBound(
-                        new XYZ(
-                            (dimLineMidT - dimDir * 2.0).X,
-                            (dimLineMidT - dimDir * 2.0).Y,
-                            view.Origin.Z),
-                        new XYZ(
-                            (dimLineMidT + dimDir * 2.0).X,
-                            (dimLineMidT + dimDir * 2.0).Y,
-                            view.Origin.Z));
+                        new XYZ((dimLineMidT - dimDir * 2.0).X,
+                                (dimLineMidT - dimDir * 2.0).Y, view.Origin.Z),
+                        new XYZ((dimLineMidT + dimDir * 2.0).X,
+                                (dimLineMidT + dimDir * 2.0).Y, view.Origin.Z));
 
-                    // Формируем цепочку с проверкой нулевых значений
                     var chainRaT = new ReferenceArray();
-
                     if (distFirstMm < 1.0)
                     {
-                        // Первый стержень на оси
                         chainRaT.Append(refGridT);
                         chainRaT.Append(refLastT);
                     }
                     else if (distLastMm < 1.0)
                     {
-                        // Последний стержень на оси
                         chainRaT.Append(refGridT);
                         chainRaT.Append(refFirstT);
                     }
                     else
                     {
-                        // Полная цепочка: ось → первый → последний
                         chainRaT.Append(refGridT);
                         chainRaT.Append(refFirstT);
                         chainRaT.Append(refLastT);
                     }
 
                     if (rebarDimType != null)
-                        doc.Create.NewDimension(
-                            view, dimLineT, chainRaT, rebarDimType);
+                        doc.Create.NewDimension(view, dimLineT, chainRaT, rebarDimType);
                     else
-                        doc.Create.NewDimension(
-                            view, dimLineT, chainRaT);
+                        doc.Create.NewDimension(view, dimLineT, chainRaT);
+
+                    createdTransDims++;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    skipReasons.AppendLine($"Rebar {rebar.Id}: попереч. — {ex.Message}");
+                }
 
             } // конец foreach (Rebar rebar)
+
+            // ПРОДОЛЬНЫЕ РАЗМЕРЫ: один размер на группу соседних массивов одинаковой
+            // длины и привязки. Подпись = ось + положения торцов вдоль стержня.
+            // Внутри подписи массивы кластеризуются по близости вдоль раскладки:
+            // соседние → один размер; такой же массив в другой части → отдельный.
+            foreach (var grp in longRecords.GroupBy(r => LongKey(r)))
+            {
+                var sorted = grp.OrderBy(r => r.Lo).ToList();
+
+                var clusters = new List<List<LongRecord>>();
+                foreach (var r in sorted)
+                {
+                    if (clusters.Count == 0)
+                    {
+                        clusters.Add(new List<LongRecord> { r });
+                        continue;
+                    }
+                    var last = clusters[clusters.Count - 1];
+                    double lastHi = last.Max(x => x.Hi);
+                    double gapTol = longDedupGapFactor
+                        * Math.Max(r.Spacing, last.Max(x => x.Spacing));
+                    if (r.Lo - lastHi <= gapTol)
+                        last.Add(r);
+                    else
+                        clusters.Add(new List<LongRecord> { r });
+                }
+
+                foreach (var cluster in clusters)
+                {
+                    try
+                    {
+                        // представитель — крайний массив на стороне выноса размера
+                        LongRecord rep = longitudinalAbove
+                            ? cluster.OrderByDescending(r => r.EdgeLevel).First()
+                            : cluster.OrderBy(r => r.EdgeLevel).First();
+
+                        XYZ endsMid = (rep.PtEnd0 + rep.PtEnd1) / 2.0;
+                        XYZ midProjected = new XYZ(
+                            endsMid.X, endsMid.Y, view.Origin.Z);
+                        double outward = longitudinalAbove ? 1.0 : -1.0;
+                        XYZ dimLineMid = midProjected
+                            + rep.DimDir * longitudinalOffset * outward;
+
+                        Line dimLine = Line.CreateBound(
+                            new XYZ((dimLineMid - rep.RebarDir * 2.0).X,
+                                    (dimLineMid - rep.RebarDir * 2.0).Y, view.Origin.Z),
+                            new XYZ((dimLineMid + rep.RebarDir * 2.0).X,
+                                    (dimLineMid + rep.RebarDir * 2.0).Y, view.Origin.Z));
+
+                        var chainRa = new ReferenceArray();
+                        if (rep.Dist0Mm < 1.0)
+                        {
+                            chainRa.Append(rep.GridRef);
+                            chainRa.Append(rep.End1Ref);
+                        }
+                        else if (rep.Dist1Mm < 1.0)
+                        {
+                            chainRa.Append(rep.GridRef);
+                            chainRa.Append(rep.End0Ref);
+                        }
+                        else
+                        {
+                            chainRa.Append(rep.GridRef);
+                            chainRa.Append(rep.End0Ref);
+                            chainRa.Append(rep.End1Ref);
+                        }
+
+                        if (rebarDimType != null)
+                            doc.Create.NewDimension(view, dimLine, chainRa, rebarDimType);
+                        else
+                            doc.Create.NewDimension(view, dimLine, chainRa);
+
+                        createdDims++;
+                    }
+                    catch (Exception ex)
+                    {
+                        skipReasons.AppendLine($"Продол. размер: {ex.Message}");
+                    }
+                }
+            }
 
             t.Commit();
         }
 
         // Итоговое сообщение
-        string diagInfo = createdDims < totalRebars && skipReasons.Length > 0
-            ? $"\n\nДиагностика:\n{skipReasons}"
-            : string.Empty;
-
         TaskDialog.Show("Готово",
-            $"На данном виде создано {annotationCount} аннотаций\n" +
-            $"Размеров до оси создано: {createdDims} из {totalRebars}" +
-            diagInfo);
+            $"Аннотаций: {annotationCount}\n" +
+            $"Продольных размеров до оси: {createdDims} из {totalRebars}\n" +
+            $"Поперечных размеров до оси: {createdTransDims}" +
+            (skipReasons.Length > 0 ? $"\n\nДиагностика:\n{skipReasons}" : ""));
 
         return Result.Succeeded;
     }
 
-    // Геометрический центр набора кривых
-    private static XYZ GetCurvesMidPoint(IList<Curve> curves)
+    // Данные одного массива для дедупликации продольных размеров
+    private class LongRecord
     {
-        if (curves.Count == 1 && curves[0] is Line line)
-            return (line.GetEndPoint(0) + line.GetEndPoint(1)) / 2.0;
+        public ElementId GridId;
+        public Reference GridRef;
+        public Reference End0Ref;
+        public Reference End1Ref;
+        public XYZ PtEnd0;
+        public XYZ PtEnd1;
+        public double Dist0Mm;
+        public double Dist1Mm;
+        public double End0Proj;   // положение торца вдоль rebarDir (для подписи)
+        public double End1Proj;
+        public double EdgeLevel;  // уровень крайнего стержня вдоль dimDir
+        public double Lo;         // габарит массива вдоль dimDir (для кластеризации)
+        public double Hi;
+        public XYZ DimDir;
+        public XYZ RebarDir;
+        public double Spacing;
+    }
 
-        var pts = new List<XYZ>();
-        foreach (Curve c in curves)
-            pts.AddRange(c.Tessellate());
-
-        return new XYZ(
-            (pts.Min(p => p.X) + pts.Max(p => p.X)) / 2.0,
-            (pts.Min(p => p.Y) + pts.Max(p => p.Y)) / 2.0,
-            (pts.Min(p => p.Z) + pts.Max(p => p.Z)) / 2.0);
+    // Подпись продольного размера: ось + положения торцов вдоль стержня (округл. до 5 мм).
+    // Одинаковая подпись = одинаковая длина и привязка к оси.
+    private static string LongKey(LongRecord r)
+    {
+        double aMm = UnitUtils.ConvertFromInternalUnits(
+            Math.Min(r.End0Proj, r.End1Proj), UnitTypeId.Millimeters);
+        double bMm = UnitUtils.ConvertFromInternalUnits(
+            Math.Max(r.End0Proj, r.End1Proj), UnitTypeId.Millimeters);
+        long a = (long)Math.Round(aMm / 5.0);
+        long b = (long)Math.Round(bMm / 5.0);
+        return r.GridId.ToString() + "_" + a + "_" + b;
     }
 }
