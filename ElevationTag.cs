@@ -124,6 +124,26 @@ namespace DAN_Plugin
                         foreach (var id in dimIds)
                             doc.Delete(id);
 
+                        // Удаляем ранее созданные виды узлов этой сборки
+                        // (тип вида Detail и имя с префиксом "{комментарий}_Разрез_"),
+                        // чтобы нумерация имён начиналась заново с 1-1.
+                        string asmComment = assembly
+                            .get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString()
+                            ?? assembly.Name;
+                        string viewPrefix = $"{asmComment}_Разрез_";
+                        var oldViewIds = new FilteredElementCollector(doc)
+                            .OfClass(typeof(ViewSection))
+                            .Cast<ViewSection>()
+                            .Where(v => !v.IsTemplate
+                                && v.ViewType == ViewType.Detail
+                                && v.Name.StartsWith(viewPrefix, StringComparison.OrdinalIgnoreCase))
+                            .Select(v => v.Id)
+                            .ToList();
+                        foreach (var id in oldViewIds)
+                        {
+                            try { doc.Delete(id); } catch { }
+                        }
+
                         txRemove.Commit();
                     }
                     catch { txRemove.RollBack(); }
@@ -142,31 +162,67 @@ namespace DAN_Plugin
             var mgr = section.GetCropRegionShapeManager();
             if (createBreak && mgr.CanBeSplit && breakRanges.Any())
             {
-                var range = breakRanges.First();
-
                 BoundingBoxXYZ cropBox = section.CropBox;
                 Transform t = cropBox.Transform;
                 double worldBottomZ = Math.Min(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z);
                 double worldTopZ = Math.Max(t.OfPoint(cropBox.Min).Z, t.OfPoint(cropBox.Max).Z);
                 double worldHeight = worldTopZ - worldBottomZ;
 
-                double breakWorldBottom = UnitUtils.ConvertToInternalUnits(range.BottomMm, UnitTypeId.Millimeters);
-                double breakWorldTop = UnitUtils.ConvertToInternalUnits(range.TopMm, UnitTypeId.Millimeters);
+                // Переводим ВСЕ диапазоны в доли полного бокса [0..1].
+                // Сортируем сверху вниз, чтобы при разбиении регионов индексы
+                // нижних регионов не смещались до их обработки.
+                var fractions = breakRanges
+                    .Select(r =>
+                    {
+                        double wb = UnitUtils.ConvertToInternalUnits(r.BottomMm, UnitTypeId.Millimeters);
+                        double wt = UnitUtils.ConvertToInternalUnits(r.TopMm, UnitTypeId.Millimeters);
+                        double a = (wb + elevationOffset - worldBottomZ) / worldHeight;
+                        double b = (wt + elevationOffset - worldBottomZ) / worldHeight;
+                        return (fLow: Math.Min(a, b), fHigh: Math.Max(a, b));
+                    })
+                    .Where(f => f.fHigh > 0.001 && f.fLow < 0.999 && (f.fHigh - f.fLow) > 0.001)
+                    .OrderByDescending(f => f.fLow)
+                    .ToList();
 
-                double localBottom = (breakWorldBottom + elevationOffset - worldBottomZ) / worldHeight;
-                double localTop = (breakWorldTop + elevationOffset - worldBottomZ) / worldHeight;
-
-                localBottom = Math.Max(0.001, Math.Min(0.999, localBottom));
-                localTop = Math.Max(0.001, Math.Min(0.999, localTop));
-
-                if (localBottom < localTop)
+                if (fractions.Any())
                 {
-                    using (Transaction txBreak = new Transaction(doc, "Создать разрыв вида"))
+                    using (Transaction txBreak = new Transaction(doc, "Создать разрывы вида"))
                     {
                         txBreak.Start();
                         try
                         {
-                            mgr.SplitRegionVertically(0, localBottom, localTop);
+                            foreach (var (fLow, fHigh) in fractions)
+                            {
+                                double mid = (fLow + fHigh) / 2.0;
+
+                                // Регион, в который попадает разрыв (доли — относительно ПОЛНОГО бокса)
+                                int idx = 0;
+                                double rMin = 0.0, rMax = 1.0;
+
+                                if (mgr.Split)
+                                {
+                                    idx = -1;
+                                    int n = mgr.NumberOfSplitRegions;
+                                    for (int i = 0; i < n; i++)
+                                    {
+                                        double a = mgr.GetSplitRegionMinimum(i);
+                                        double b = mgr.GetSplitRegionMaximum(i);
+                                        if (mid > a && mid < b) { idx = i; rMin = a; rMax = b; break; }
+                                    }
+                                    if (idx < 0) continue; // разрыв попал в зазор существующего — пропускаем
+                                }
+
+                                double span = rMax - rMin;
+                                if (span <= 1e-6) continue;
+
+                                // Параметры SplitRegionVertically — доли ВНУТРИ разбиваемого региона
+                                double relLow = Math.Max(0.001, Math.Min(0.999, (fLow - rMin) / span));
+                                double relHigh = Math.Max(0.001, Math.Min(0.999, (fHigh - rMin) / span));
+                                if (relLow >= relHigh) continue;
+
+                                mgr.SplitRegionVertically(idx, relLow, relHigh);
+                            }
+
                             if (!section.CropBoxActive) section.CropBoxActive = true;
                             if (!section.CropBoxVisible) section.CropBoxVisible = true;
                             txBreak.Commit();
@@ -399,6 +455,82 @@ namespace DAN_Plugin
             string resultMsg = $"Сборка: {assemblyComment}\n" +
                                $"Создано отметок: {createdCount} из {allFaces.Count}";
             if (skippedCount > 0) resultMsg += $"\nПропущено: {skippedCount}";
+            if (createBreak) resultMsg += "\n\n⚠ Подвиньте части разрыва вручную через синие ручки на виде.";
+
+            // Несколько видов узлов — по одному на каждую смену толщины стены.
+            // Стены сборки сортируются снизу вверх; вид создаётся на самой нижней
+            // стене (обязательно) и далее на каждой стене, чья толщина отличается
+            // от нижележащей. Толщина берётся из типа стены (параметр "Толщина").
+            double thkTol = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
+
+            double WallBottomZ(Wall w)
+            {
+                BoundingBoxXYZ bb = w.get_BoundingBox(null);
+                return bb != null ? bb.Min.Z : 0.0;
+            }
+            double WallThickness(Wall w)
+            {
+                try { return w.WallType.Width; }            // параметр "Толщина" типа стены
+                catch { try { return w.Width; } catch { return 0.0; } }
+            }
+
+            // ВАЖНО: берём ВСЕ стены сборки, а не отфильтрованный по видимости
+            // список walls (тот обрезан подрезкой/разрывами активного вида и может
+            // содержать только нижние этажи). Иначе смена толщины не обнаружится.
+            List<Wall> assemblyWalls = assembly.GetMemberIds()
+                .Select(id => doc.GetElement(id))
+                .OfType<Wall>()
+                .ToList();
+
+            var sortedWalls = assemblyWalls
+                .Select(w => new { Wall = w, Bottom = WallBottomZ(w), Thickness = WallThickness(w) })
+                .OrderBy(x => x.Bottom)
+                .ToList();
+
+            var changeWalls = new List<Wall>();
+            double prevThk = double.NaN;
+            foreach (var x in sortedWalls)
+            {
+                if (double.IsNaN(prevThk) || Math.Abs(x.Thickness - prevThk) > thkTol)
+                    changeWalls.Add(x.Wall);   // самая нижняя или смена толщины
+                prevThk = x.Thickness;
+            }
+
+            // Диагностика: какие имена с этим префиксом уже есть в проекте
+            string namePrefix = $"{assemblyComment}_Разрез_";
+            var preExisting = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewSection)).Cast<ViewSection>()
+                .Where(v => v.Name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase))
+                .Select(v => $"{v.Name} [{v.ViewType}]")
+                .ToList();
+
+            int sectionsCreated = 0;
+            using (Transaction txSection = new Transaction(doc, "Создать виды узлов"))
+            {
+                txSection.Start();
+                for (int i = 0; i < changeWalls.Count; i++)
+                {
+                    Wall cw = changeWalls[i];
+                    try
+                    {
+                        BoundingBoxXYZ bb = cw.get_BoundingBox(null);
+                        double cz = (bb.Min.Z + bb.Max.Z) / 2.0;   // середина по высоте этой стены
+                        CreateWallSection(doc, assembly, cw, assemblyComment, cz, rightVec, i + 1);
+                        sectionsCreated++;
+                    }
+                    catch (Exception ex)
+                    {
+                        TaskDialog.Show("Предупреждение (вид узла)",
+                            $"Стена Id={cw.Id}: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                txSection.Commit();
+            }
+
+            resultMsg += $"\nСтен в сборке: {assemblyWalls.Count}, видов узлов: {sectionsCreated} (по сменам толщины)";
+            if (preExisting.Any())
+                resultMsg += $"\nУже были имена с префиксом \"{namePrefix}\":\n  " + string.Join("\n  ", preExisting);
+
             TaskDialog.Show("Готово", resultMsg);
             return Result.Succeeded;
         }
@@ -655,7 +787,7 @@ namespace DAN_Plugin
             Line dimLine = Line.CreateBound(
                 MakePt(sortedFaces.First().Z - pad),
                 MakePt(sortedFaces.Last().Z + pad));
-             
+
             ReferenceArray refArray = new ReferenceArray();
             foreach (FaceData fd in sortedFaces) refArray.Append(fd.FaceRef);
 
@@ -677,6 +809,140 @@ namespace DAN_Plugin
                     else doc.Create.NewDimension(view, l, refs);
                 }
             }
+        }
+
+        // -----------------------------------------------------------------------
+        /// <summary>
+        /// Создаёт вид узла (Detail) вдоль всей длины стены из сборки.
+        /// Секущая плоскость на мировой отметке cutZ (середина по высоте стены),
+        /// взгляд направлен ВНИЗ. Тип вида: "Вид узла" → "*04_Стены_сечение".
+        /// Применяется шаблон вида "*01_КЖ_(04_Стены)_Сечение".
+        /// Имя вида: "{комментарий сборки}_Разрез_{n}-{n}".
+        /// </summary>
+        private void CreateWallSection(Document doc, AssemblyInstance assembly,
+            Wall wall, string assemblyComment, double cutZ, XYZ viewRight, int seqIndex)
+        {
+            if (wall == null) return;
+
+            LocationCurve locationCurve = wall.Location as LocationCurve;
+            if (locationCurve == null) return;
+
+            Line wallLine = locationCurve.Curve as Line;
+            if (wallLine == null) return;
+
+            // Геометрия стены
+            XYZ wallStart = wallLine.GetEndPoint(0);
+            XYZ wallEnd = wallLine.GetEndPoint(1);
+            XYZ wallMid = (wallStart + wallEnd) / 2.0;
+            double wallLength = wallLine.Length;
+            double wallThickness = wall.Width;
+
+            // Параметры разреза
+            // ВНИМАНИЕ: размах по X задаёт и рамку подрезки, и положение головок
+            // марки одновременно — в API их развязать нельзя. Держим узкие границы.
+            double offsetLen = UnitUtils.ConvertToInternalUnits(500, UnitTypeId.Millimeters);   // запас по длине (подрезка + марки)
+            double offsetThk = UnitUtils.ConvertToInternalUnits(500, UnitTypeId.Millimeters);   // запас по толщине
+            double depthDown = UnitUtils.ConvertToInternalUnits(500, UnitTypeId.Millimeters);   // глубина взгляда вниз
+            double depthUp = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);    // запас вверх до секущей
+
+            // Горизонтальный разрез вдоль всей длины стены, взгляд ВНИЗ.
+            // BasisX = вдоль длины стены (вправо во виде)
+            // BasisZ = -Z (к наблюдателю снизу → взгляд направлен вниз)
+            // BasisY = BasisZ × BasisX (поперёк толщины; правая тройка)
+            XYZ wallDir = wallLine.Direction.Normalize();
+
+            // Жёсткая привязка «лево/право»: ориентируем длину стены по правому
+            // направлению активного вида (его внутренним координатам), чтобы +X
+            // во виде узла всегда совпадал с правой стороной исходного разреза,
+            // независимо от того, в какую сторону нарисована линия стены.
+            XYZ viewRightHoriz = new XYZ(viewRight.X, viewRight.Y, 0);
+            if (viewRightHoriz.GetLength() > 1e-9 &&
+                wallDir.DotProduct(viewRightHoriz.Normalize()) < 0)
+                wallDir = wallDir.Negate();
+
+            XYZ rightDir = wallDir;
+            XYZ viewBasisZ = XYZ.BasisZ.Negate();                          // -Z
+            XYZ upDir = viewBasisZ.CrossProduct(rightDir).Normalize();      // поперёк толщины
+
+            // Origin — середина стены на отметке cutZ (между отметками 1 и 2)
+            XYZ origin = new XYZ(wallMid.X, wallMid.Y, cutZ);
+
+            Transform t = Transform.Identity;
+            t.BasisX = rightDir;     // вдоль длины
+            t.BasisY = upDir;        // поперёк толщины
+            t.BasisZ = viewBasisZ;   // -Z (BasisX × BasisY = -Z → правая тройка, взгляд вниз)
+            t.Origin = origin;
+
+            // Локальный +Z теперь направлен в мировой -Z (вниз),
+            // поэтому глубину взгляда (depthDown) кладём в Max.Z.
+            BoundingBoxXYZ sectionBox = new BoundingBoxXYZ();
+            sectionBox.Transform = t;
+            sectionBox.Min = new XYZ(
+                -wallLength / 2.0 - offsetLen,      // X — левая граница (подрезка и левая марка)
+                -wallThickness / 2.0 - offsetThk,   // Y — толщина стены
+                -depthUp);                          // Z — небольшой запас выше секущей
+            sectionBox.Max = new XYZ(
+                 wallLength / 2.0 + offsetLen,      // X — правая граница (подрезка и правая марка)
+                 wallThickness / 2.0 + offsetThk,
+                 depthDown);                        // Z — глубина взгляда вниз
+
+            // Тип вида — "Вид узла" (Detail) с именем "*04_Стены_сечение"
+            ViewFamilyType detailType = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewFamilyType))
+                .Cast<ViewFamilyType>()
+                .FirstOrDefault(vft => vft.ViewFamily == ViewFamily.Detail &&
+                    vft.Name.Equals("*04_Стены_сечение", StringComparison.OrdinalIgnoreCase));
+
+            if (detailType == null)
+                detailType = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewFamilyType))
+                    .Cast<ViewFamilyType>()
+                    .FirstOrDefault(vft => vft.ViewFamily == ViewFamily.Detail);
+
+            if (detailType == null) return;
+
+            string sectionName = GenerateSectionName(doc, assemblyComment, seqIndex);
+
+            // CreateDetail создаёт вид семейства "Вид узла"
+            ViewSection newSection = ViewSection.CreateDetail(doc, detailType.Id, sectionBox);
+
+            newSection.Name = sectionName;
+
+            // Применяем шаблон вида "*01_КЖ_(04_Стены)_Сечение"
+            View viewTemplate = new FilteredElementCollector(doc)
+                .OfClass(typeof(View))
+                .Cast<View>()
+                .FirstOrDefault(v => v.IsTemplate &&
+                    v.Name.Equals("*01_КЖ_(04_Стены)_Сечение", StringComparison.OrdinalIgnoreCase));
+
+            if (viewTemplate != null)
+                newSection.ViewTemplateId = viewTemplate.Id;
+            else
+                TaskDialog.Show("Предупреждение", "Шаблон вида \"*01_КЖ_(04_Стены)_Сечение\" не найден.");
+
+            Parameter markParam = newSection.LookupParameter("BI_марка_конструкции");
+            if (markParam != null && !markParam.IsReadOnly)
+                markParam.Set(assemblyComment);
+        }
+
+        private string GenerateSectionName(Document doc, string assemblyComment, int preferredIndex)
+        {
+            var existingNames = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewSection))
+                .Cast<ViewSection>()
+                .Select(v => v.Name)
+                .ToHashSet();
+
+            // Сначала пробуем предпочтительный номер (порядок в пачке), затем —
+            // ближайший свободный вверх. Так нумерация идёт 1-1, 2-2, 3-3…
+            for (int i = preferredIndex; i <= preferredIndex + 100; i++)
+            {
+                string candidate = $"{assemblyComment}_Разрез_{i}-{i}";
+                if (!existingNames.Contains(candidate))
+                    return candidate;
+            }
+
+            return $"{assemblyComment}_Разрез_{Guid.NewGuid():N}";
         }
     }
 }

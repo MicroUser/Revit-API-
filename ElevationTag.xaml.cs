@@ -1,4 +1,7 @@
 ﻿using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -10,15 +13,46 @@ namespace DAN_Plugin
         public double TopMm { get; set; }
     }
 
+    /// <summary>Строка ввода одного разрыва (источник для ItemsControl).</summary>
+    public class BreakRangeRow : INotifyPropertyChanged
+    {
+        private string _bottom = "";
+        private string _top = "";
+
+        public string Bottom
+        {
+            get => _bottom;
+            set { _bottom = value; OnPropertyChanged(nameof(Bottom)); }
+        }
+
+        public string Top
+        {
+            get => _top;
+            set { _top = value; OnPropertyChanged(nameof(Top)); }
+        }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged(string name) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
     public partial class SettingsWindow : Window
     {
         public bool CreateBreak { get; private set; }
         public bool Recreate { get; private set; }
         public List<BreakRange> BreakRanges { get; private set; } = new List<BreakRange>();
 
+        private readonly ObservableCollection<BreakRangeRow> _rows =
+            new ObservableCollection<BreakRangeRow>();
+
         public SettingsWindow()
         {
             InitializeComponent();
+
+            // Разрыв по умолчанию
+            _rows.Add(new BreakRangeRow { Bottom = "30000", Top = "50000" });
+            RangesItems.ItemsSource = _rows;
+
             Validate();
         }
 
@@ -29,18 +63,26 @@ namespace DAN_Plugin
             Validate();
         }
 
-        private void Heights_TextChanged(object sender, TextChangedEventArgs e)
+        private void Ranges_TextChanged(object sender, TextChangedEventArgs e) => Validate();
+
+        private void BtnAddRange_Click(object sender, RoutedEventArgs e)
         {
-            if (TxtBottomHeight == null || TxtTopHeight == null) return;
+            _rows.Add(new BreakRangeRow());
+            Validate();
+        }
+
+        private void BtnRemoveRange_Click(object sender, RoutedEventArgs e)
+        {
+            if (_rows.Count <= 1) return; // всегда оставляем минимум одну строку
+            if ((sender as FrameworkElement)?.DataContext is BreakRangeRow row)
+                _rows.Remove(row);
             Validate();
         }
 
         private void Validate()
         {
-            if (TxtBottomHeight == null || TxtTopHeight == null || BtnCreate == null) return;
+            if (BtnCreate == null) return;
 
-            TxtBottomError.Visibility = Visibility.Collapsed;
-            TxtTopError.Visibility = Visibility.Collapsed;
             PnlError.Visibility = Visibility.Collapsed;
 
             if (ChkCreateBreak.IsChecked != true)
@@ -49,30 +91,49 @@ namespace DAN_Plugin
                 return;
             }
 
-            bool valid = true;
+            var errors = new List<string>();
+            var parsed = new List<(double bottom, double top)>();
 
-            if (!double.TryParse(TxtBottomHeight.Text, out double bottom) || bottom < 0)
+            int i = 1;
+            foreach (var row in _rows)
             {
-                TxtBottomError.Text = "Введите корректное положительное число";
-                TxtBottomError.Visibility = Visibility.Visible;
-                valid = false;
+                bool okB = double.TryParse(row.Bottom, out double b) && b >= 0;
+                bool okT = double.TryParse(row.Top, out double t) && t >= 0;
+
+                if (!okB || !okT)
+                    errors.Add($"Разрыв {i}: введите корректные положительные числа.");
+                else if (b >= t)
+                    errors.Add($"Разрыв {i}: нижняя высота должна быть меньше верхней.");
+                else
+                    parsed.Add((b, t));
+
+                i++;
             }
 
-            if (!double.TryParse(TxtTopHeight.Text, out double top) || top < 0)
+            // Пересечения среди корректных диапазонов
+            var sorted = parsed.OrderBy(p => p.bottom).ToList();
+            for (int k = 1; k < sorted.Count; k++)
             {
-                TxtTopError.Text = "Введите корректное положительное число";
-                TxtTopError.Visibility = Visibility.Visible;
-                valid = false;
+                if (sorted[k].bottom < sorted[k - 1].top)
+                {
+                    errors.Add("Разрывы не должны пересекаться.");
+                    break;
+                }
             }
 
-            if (valid && bottom >= top)
+            if (_rows.Count == 0)
+                errors.Add("Добавьте хотя бы один разрыв.");
+
+            if (errors.Any())
             {
-                TxtGeneralError.Text = "Нижняя высота должна быть меньше верхней";
+                TxtGeneralError.Text = string.Join("\n", errors);
                 PnlError.Visibility = Visibility.Visible;
-                valid = false;
+                BtnCreate.IsEnabled = false;
             }
-
-            BtnCreate.IsEnabled = valid;
+            else
+            {
+                BtnCreate.IsEnabled = true;
+            }
         }
 
         private void BtnCreate_Click(object sender, RoutedEventArgs e)
@@ -80,12 +141,18 @@ namespace DAN_Plugin
             CreateBreak = ChkCreateBreak.IsChecked == true;
             Recreate = ChkRecreate.IsChecked == true;
 
+            BreakRanges.Clear();
             if (CreateBreak)
-                BreakRanges.Add(new BreakRange
+            {
+                foreach (var row in _rows)
                 {
-                    BottomMm = double.Parse(TxtBottomHeight.Text),
-                    TopMm = double.Parse(TxtTopHeight.Text)
-                });
+                    if (double.TryParse(row.Bottom, out double b) &&
+                        double.TryParse(row.Top, out double t) && b < t)
+                    {
+                        BreakRanges.Add(new BreakRange { BottomMm = b, TopMm = t });
+                    }
+                }
+            }
 
             DialogResult = true;
             Close();

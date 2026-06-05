@@ -77,6 +77,9 @@ public class CreateRebarAnnotation : IExternalCommand
         // Данные продольных размеров — для дедупликации соседних одинаковых
         var longRecords = new List<LongRecord>();
 
+        // Данные поперечных размеров — для объединения соседних массивов в цепочку
+        var transRecords = new List<TransRecord>();
+
         // Размещение поперечного размера: выносится за торец стержней, чтобы его было видно.
         // true — за дальний конец (по +rebarDir), false — за ближний (по -rebarDir).
         const bool transverseOnRight = false;
@@ -595,47 +598,24 @@ public class CreateRebarAnnotation : IExternalCommand
                     if (distFirstMm < 1.0 && distLastMm < 1.0)
                         continue;
 
-                    // Линию размера выносим за торец стержней (вбок), чтобы её было
-                    // видно: к нужному концу поля вдоль rebarDir + отступ.
-                    // transverseOnRight: true — за дальний конец (+rebarDir),
-                    // false — за ближний (-rebarDir).
-                    double targetRebarProj = transverseOnRight
-                        ? rebarMax + transverseSideMargin
-                        : rebarMin - transverseSideMargin;
-                    double shift = targetRebarProj - midPoint.DotProduct(rebarDir);
-                    XYZ transMid = midPoint + rebarDir * shift;
-                    XYZ dimLineMidT = new XYZ(transMid.X, transMid.Y, view.Origin.Z);
-
-                    Line dimLineT = Line.CreateBound(
-                        new XYZ((dimLineMidT - dimDir * 2.0).X,
-                                (dimLineMidT - dimDir * 2.0).Y, view.Origin.Z),
-                        new XYZ((dimLineMidT + dimDir * 2.0).X,
-                                (dimLineMidT + dimDir * 2.0).Y, view.Origin.Z));
-
-                    var chainRaT = new ReferenceArray();
-                    if (distFirstMm < 1.0)
+                    // Не создаём размер сразу — копим, чтобы после цикла объединить
+                    // соседние массивы одной оси в общую цепочку.
+                    transRecords.Add(new TransRecord
                     {
-                        chainRaT.Append(refGridT);
-                        chainRaT.Append(refLastT);
-                    }
-                    else if (distLastMm < 1.0)
-                    {
-                        chainRaT.Append(refGridT);
-                        chainRaT.Append(refFirstT);
-                    }
-                    else
-                    {
-                        chainRaT.Append(refGridT);
-                        chainRaT.Append(refFirstT);
-                        chainRaT.Append(refLastT);
-                    }
-
-                    if (rebarDimType != null)
-                        doc.Create.NewDimension(view, dimLineT, chainRaT, rebarDimType);
-                    else
-                        doc.Create.NewDimension(view, dimLineT, chainRaT);
-
-                    createdTransDims++;
+                        GridId = nearestGridT.Id,
+                        GridRef = refGridT,
+                        GridPos = gridPos,
+                        FirstRef = refFirstT,
+                        FirstPos = firstPosT,
+                        LastRef = refLastT,
+                        LastPos = lastPosT,
+                        DimDir = dimDir,
+                        RebarDir = rebarDir,
+                        MidPoint = midPoint,
+                        RebarMin = rebarMin,
+                        RebarMax = rebarMax,
+                        Spacing = spacing
+                    });
                 }
                 catch (Exception ex)
                 {
@@ -724,6 +704,107 @@ public class CreateRebarAnnotation : IExternalCommand
                 }
             }
 
+            // ПОПЕРЕЧНЫЕ РАЗМЕРЫ: соседние массивы у одной оси объединяем в цепочку.
+            // Группируем по оси, внутри — кластеризуем по близости вдоль раскладки:
+            // соседние массивы → одна цепочка (ось → стержни всех массивов с зазорами),
+            // одиночный массив → обычная привязка ось → крайние стержни.
+            foreach (var grp in transRecords.GroupBy(r => r.GridId))
+            {
+                // 1) Делим массивы на горизонтальные зоны по габариту вдоль стержней
+                //    (rebarDir). Массивы из разных мест плана (непересекающиеся по
+                //    rebarDir) не попадают в одну поперечную цепочку.
+                var zones = new List<List<TransRecord>>();
+                foreach (var r in grp.OrderBy(x => x.RebarMin))
+                {
+                    if (zones.Count == 0)
+                    {
+                        zones.Add(new List<TransRecord> { r });
+                        continue;
+                    }
+                    var lastZone = zones[zones.Count - 1];
+                    double zoneMax = lastZone.Max(x => x.RebarMax);
+                    // пересекается по rebarDir с текущей зоной?
+                    if (r.RebarMin <= zoneMax)
+                        lastZone.Add(r);
+                    else
+                        zones.Add(new List<TransRecord> { r });
+                }
+
+                // 2) Каждая зона целиком — одна цепочка поперечного размера
+                //    (массивы одного ряда соединяются; разные зоны — раздельно).
+                foreach (var zone in zones)
+                {
+                    try
+                    {
+                        var recs = zone;
+                        var rep = recs[0];
+
+                        // Ось + крайние стержни всех массивов кластера, вдоль dimDir
+                        var pts = new List<(Reference reference, double pos)>();
+                        pts.Add((rep.GridRef, rep.GridPos));
+                        foreach (var r in recs)
+                        {
+                            pts.Add((r.FirstRef, r.FirstPos));
+                            pts.Add((r.LastRef, r.LastPos));
+                        }
+                        pts.Sort((a, b) => a.pos.CompareTo(b.pos));
+
+                        double dedupTol = UnitUtils.ConvertToInternalUnits(
+                            1, UnitTypeId.Millimeters);
+                        var ordered = new List<(Reference reference, double pos)>();
+                        foreach (var p in pts)
+                            if (ordered.Count == 0
+                                || Math.Abs(p.pos - ordered[ordered.Count - 1].pos) > dedupTol)
+                                ordered.Add(p);
+                        if (ordered.Count < 2)
+                            continue;
+
+                        var chainRa = new ReferenceArray();
+                        foreach (var p in ordered)
+                            chainRa.Append(p.reference);
+
+                        // Линия вбок за торец общего поля кластера
+                        double clusterRebarMin = recs.Min(r => r.RebarMin);
+                        double clusterRebarMax = recs.Max(r => r.RebarMax);
+                        double targetRebarProj = transverseOnRight
+                            ? clusterRebarMax + transverseSideMargin
+                            : clusterRebarMin - transverseSideMargin;
+
+                        XYZ baseMid = XYZ.Zero;
+                        foreach (var r in recs) baseMid += r.MidPoint;
+                        baseMid = baseMid / recs.Count;
+
+                        double chainCenter =
+                            (ordered[0].pos + ordered[ordered.Count - 1].pos) / 2.0;
+                        double shiftR = targetRebarProj - baseMid.DotProduct(rep.RebarDir);
+                        double shiftD = chainCenter - baseMid.DotProduct(rep.DimDir);
+                        XYZ transMid = baseMid + rep.RebarDir * shiftR + rep.DimDir * shiftD;
+                        XYZ dimLineMidT = new XYZ(transMid.X, transMid.Y, view.Origin.Z);
+
+                        double half = (ordered[ordered.Count - 1].pos - ordered[0].pos) / 2.0
+                            + UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+
+                        Line dimLineT = Line.CreateBound(
+                            new XYZ((dimLineMidT - rep.DimDir * half).X,
+                                    (dimLineMidT - rep.DimDir * half).Y, view.Origin.Z),
+                            new XYZ((dimLineMidT + rep.DimDir * half).X,
+                                    (dimLineMidT + rep.DimDir * half).Y, view.Origin.Z));
+
+                        if (rebarDimType != null)
+                            doc.Create.NewDimension(view, dimLineT, chainRa, rebarDimType);
+                        else
+                            doc.Create.NewDimension(view, dimLineT, chainRa);
+
+                        createdTransDims++;
+                    }
+                    catch (Exception ex)
+                    {
+                        skipReasons.AppendLine(
+                            $"Попереч. цепочка по оси {grp.Key}: {ex.Message}");
+                    }
+                }
+            }
+
             t.Commit();
         }
 
@@ -755,6 +836,24 @@ public class CreateRebarAnnotation : IExternalCommand
         public double Hi;
         public XYZ DimDir;
         public XYZ RebarDir;
+        public double Spacing;
+    }
+
+    // Данные одного массива для построения цепочки поперечного размера
+    private class TransRecord
+    {
+        public ElementId GridId;
+        public Reference GridRef;
+        public double GridPos;
+        public Reference FirstRef;
+        public double FirstPos;
+        public Reference LastRef;
+        public double LastPos;
+        public XYZ DimDir;
+        public XYZ RebarDir;
+        public XYZ MidPoint;
+        public double RebarMin;   // габарит поля вдоль rebarDir (для выноса вбок)
+        public double RebarMax;
         public double Spacing;
     }
 
