@@ -7,9 +7,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public class WallHostSelectionFilter : ISelectionFilter
+public class AssemblySelectionFilter : ISelectionFilter
 {
-    public bool AllowElement(Element elem) => elem is Wall;
+    public bool AllowElement(Element elem) => elem is AssemblyInstance;
     public bool AllowReference(Reference reference, XYZ position) => false;
 }
 
@@ -18,6 +18,13 @@ public class WallRebarAnnotation : IExternalCommand
 {
     // Имя формы (RebarShape) у П-шек в торцах стены.
     private const string P_SHAPE_NAME = "(форма)П-шка равносторонний";
+
+    // Линия аннотаций — на этом расстоянии от края стены (мм).
+    private const double ANNOTATION_OFFSET_MM = 800.0;
+
+    private const string TYPE_BIG_NAME = "шаг_количество_длина/поз.(_)";
+    private const string TYPE_SMALL_NAME = "шаг_количество_длина/поз.(_)";
+    private const string DIM_TYPE_NAME = "BI_основной_2,5мм_округление_до_5мм";
 
     public Result Execute(
         ExternalCommandData commandData,
@@ -28,39 +35,121 @@ public class WallRebarAnnotation : IExternalCommand
         Document doc = uidoc.Document;
         View view = doc.ActiveView;
 
-        // ── ШАГ 1: выбор стены ───────────────────────────────────────────────
-        Reference wref;
+        // ── ШАГ 1: выбор сборки ──────────────────────────────────────────────
+        Reference aref;
         try
         {
-            wref = uidoc.Selection.PickObject(
+            aref = uidoc.Selection.PickObject(
                 ObjectType.Element,
-                new WallHostSelectionFilter(),
-                "Выберите стену");
+                new AssemblySelectionFilter(),
+                "Выберите сборку");
         }
         catch (Autodesk.Revit.Exceptions.OperationCanceledException)
         {
             return Result.Cancelled;
         }
 
-        Wall wall = doc.GetElement(wref.ElementId) as Wall;
-        if (wall == null)
+        AssemblyInstance assembly = doc.GetElement(aref.ElementId) as AssemblyInstance;
+        if (assembly == null)
         {
-            message = "Выбранный элемент не является стеной.";
+            message = "Выбранный элемент не является сборкой.";
+            return Result.Failed;
+        }
+
+        // Все стены — члены сборки
+        var walls = assembly.GetMemberIds()
+            .Select(id => doc.GetElement(id) as Wall)
+            .Where(w => w != null)
+            .ToList();
+
+        if (walls.Count == 0)
+        {
+            message = "В сборке не найдено стен.";
             return Result.Failed;
         }
 
         var log = new System.Text.StringBuilder();
 
-        // Вся арматура, хостящаяся в этой стене
-        var hosted = new FilteredElementCollector(doc)
-            .OfClass(typeof(Rebar))
-            .Cast<Rebar>()
-            .Where(r => r.GetHostId() == wall.Id)
-            .ToList();
+        // ── Выбор стороны аннотаций ──────────────────────────────────────────
+        TaskDialog sideDlg = new TaskDialog("Сторона аннотаций")
+        {
+            MainInstruction = "С какой стороны от стены создавать марки и размеры?",
+            CommonButtons = TaskDialogCommonButtons.Cancel
+        };
+        sideDlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Справа от стены");
+        sideDlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Слева от стены");
+
+        TaskDialogResult sideRes = sideDlg.Show();
+        if (sideRes != TaskDialogResult.CommandLink1 && sideRes != TaskDialogResult.CommandLink2)
+            return Result.Cancelled;
+
+        bool onRight = sideRes == TaskDialogResult.CommandLink1;
+        XYZ sideDir = onRight ? view.RightDirection : view.RightDirection.Negate();
+
+        // ── Кэш типов аннотаций и тип размера (один раз) ─────────────────────
+        Dictionary<string, MultiReferenceAnnotationType> typeCache =
+            new FilteredElementCollector(doc)
+                .OfClass(typeof(MultiReferenceAnnotationType))
+                .Cast<MultiReferenceAnnotationType>()
+                .Where(x => x.Name == TYPE_BIG_NAME || x.Name == TYPE_SMALL_NAME)
+                .ToDictionary(x => x.Name, x => x);
+
+        DimensionType rebarDimType = new FilteredElementCollector(doc)
+            .OfClass(typeof(DimensionType))
+            .Cast<DimensionType>()
+            .FirstOrDefault(x => x.Name == DIM_TYPE_NAME);
+
+        // Арматура документа, сгруппированная по хосту — один проход на всю сборку.
+        Dictionary<ElementId, List<Rebar>> rebarByHost =
+            new FilteredElementCollector(doc)
+                .OfClass(typeof(Rebar))
+                .Cast<Rebar>()
+                .GroupBy(r => r.GetHostId())
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+        using (Transaction t = new Transaction(doc, "Аннотации арматуры (сборка)"))
+        {
+            t.Start();
+
+            foreach (Wall wall in walls)
+            {
+                rebarByHost.TryGetValue(wall.Id, out List<Rebar> hosted);
+                AnnotateWall(doc, view, wall, hosted, typeCache, rebarDimType, sideDir, log);
+            }
+
+            t.Commit();
+        }
+
+        return Result.Succeeded;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Обработка одной стены: отбор арматуры + создание размеров и марки.
+    // Возвращает true, если что-то было создано.
+    // ─────────────────────────────────────────────────────────────────────────
+    private static bool AnnotateWall(
+        Document doc, View view, Wall wall,
+        List<Rebar> hosted,
+        Dictionary<string, MultiReferenceAnnotationType> typeCache,
+        DimensionType rebarDimType,
+        XYZ sideDir,
+        System.Text.StringBuilder log)
+    {
+        string tag = $"Стена {wall.Id.IntegerValue}";
+
+        // Знак стороны: +1 если sideDir совпадает с «вправо» вида, иначе −1.
+        double sideSign = sideDir.DotProduct(view.RightDirection) >= 0 ? 1.0 : -1.0;
+
+        if (hosted == null || hosted.Count == 0)
+        {
+            log.AppendLine($"{tag}: арматуры не найдено — пропуск.");
+            return false;
+        }
 
         // Горизонтальный рабочий набор (на него «3000» и «50»):
         // ориентация «горизонт», незамкнутый, с наибольшим числом стержней.
         Rebar rebar1 = hosted
+            .Where(r => IsInsideCrop(view, r))
             .Where(r =>
             {
                 string o = ClassifyOrient(r, view, out bool closed, out double _);
@@ -69,92 +158,69 @@ public class WallRebarAnnotation : IExternalCommand
             .OrderByDescending(r => r.NumberOfBarPositions)
             .FirstOrDefault();
 
-        if (rebar1 == null)
-        {
-            message = "В стене не найдено горизонтальной рабочей арматуры.";
-            return Result.Failed;
-        }
-
-        // Правая П-шка (на неё марка): по имени формы и по стороне (правее центра стены).
+        // П-шка на ВЫБРАННОЙ стороне (на неё марка): по имени формы, по ориентации
+        // (только ГОРИЗОНТАЛЬНЫЕ — полки вдоль горизонтали вида) и по стороне.
         double wallCenterR = WallCenterAlong(wall, view, view.RightDirection);
         Rebar rebar2 = hosted
+            .Where(r => IsInsideCrop(view, r))
             .Where(r => ShapeName(doc, r) == P_SHAPE_NAME)
+            .Where(r => IsHorizontalPShape(r, view))
             .Select(r =>
             {
                 ClassifyOrient(r, view, out bool _, out double cR);
                 return new { Rebar = r, CenterR = cR };
             })
-            .Where(x => x.CenterR >= wallCenterR)
-            .OrderByDescending(x => x.CenterR)
+            // на выбранной стороне: (centerR - center) одного знака с sideSign
+            .Where(x => (x.CenterR - wallCenterR) * sideSign >= 0)
+            // самый крайний на этой стороне
+            .OrderByDescending(x => (x.CenterR - wallCenterR) * sideSign)
             .Select(x => x.Rebar)
             .FirstOrDefault();
 
         if (rebar2 == null)
-            log.AppendLine($"Правая П-шка по форме «{P_SHAPE_NAME}» не найдена — марка не создаётся.");
+            log.AppendLine($"{tag}: П-шка по форме «{P_SHAPE_NAME}» на выбранной стороне не найдена.");
 
-        // ── ШАГ 2 (АВТО): точка размещения аннотации — 800 мм от края стены ──
-        // Раньше тут был PickPoint; теперь положение линии аннотаций вычисляется
-        // автоматически: вбок (вдоль стержней) на 800 мм от грани стены.
-        const double ANNOTATION_OFFSET_MM = 800.0;
-        XYZ annotationPoint = ComputeAutoAnnotationPoint(
-            doc, view, rebar1, ANNOTATION_OFFSET_MM, log);
-        if (annotationPoint == null)
+        if (rebar1 == null && rebar2 == null)
         {
-            message = "Не удалось вычислить точку аннотации " +
-                      "(нет стены-хоста или геометрии стержня)." +
-                      (log.Length > 0 ? "\n" + log : "");
-            return Result.Failed;
+            log.AppendLine($"{tag}: ни горизонтальной рабочей, ни П-шки — пропуск.");
+            return false;
         }
 
-        // ── ШАГ 2: стержень для марки выбран автоматически (правая П-шка, см. выше) ──
+        XYZ tagHead1 = null;
 
-        // ── КЭШ ТИПОВ АННОТАЦИЙ ───────────────────────────────────────────────
-        string typeBigName = "шаг_количество_длина/поз.(_)";
-        string typeSmallName = "шаг_количество_длина/поз.(_)";
-
-        Dictionary<string, MultiReferenceAnnotationType> typeCache =
-            new FilteredElementCollector(doc)
-                .OfClass(typeof(MultiReferenceAnnotationType))
-                .Cast<MultiReferenceAnnotationType>()
-                .Where(x => x.Name == typeBigName || x.Name == typeSmallName)
-                .ToDictionary(x => x.Name, x => x);
-
-        // ── ТИП РАЗМЕРА ───────────────────────────────────────────────────────
-        DimensionType rebarDimType = new FilteredElementCollector(doc)
-            .OfClass(typeof(DimensionType))
-            .Cast<DimensionType>()
-            .FirstOrDefault(x => x.Name == "BI_основной_2,5мм_округление_до_5мм");
-
-        using (Transaction t = new Transaction(doc, "Аннотации арматуры"))
+        if (rebar1 != null)
         {
-            t.Start();
+            XYZ annotationPoint = ComputeAutoAnnotationPoint(
+                doc, view, rebar1, ANNOTATION_OFFSET_MM, sideDir, log);
 
-            // REBAR 1 → MultiReferenceAnnotation
-            XYZ dimDir1 = null;
-            XYZ tagHead1 = null;
-            CreateMultiReferenceAnnotation(doc, view, rebar1,
-                typeCache, typeBigName, typeSmallName, annotationPoint, log,
-                out dimDir1, out tagHead1);
+            if (annotationPoint == null)
+            {
+                log.AppendLine($"{tag}: не удалось вычислить точку аннотации.");
+            }
+            else
+            {
+                XYZ dimDir1 = null;
+                CreateMultiReferenceAnnotation(doc, view, rebar1,
+                    typeCache, TYPE_BIG_NAME, TYPE_SMALL_NAME, annotationPoint, log,
+                    out dimDir1, out tagHead1);
 
-            // REBAR 1 → размеры защитного слоя по краям (торец стены → крайний стержень)
-            CreateCoverDimensions(doc, view, rebar1, annotationPoint, rebarDimType, log);
-
-            // REBAR 2 → IndependentTag без выноски (если найдена правая П-шка)
-            if (rebar2 != null)
-                CreateCategoryTag(doc, view, rebar2, tagHead1, log);
-
-            t.Commit();
+                CreateCoverDimensions(doc, view, rebar1, annotationPoint, rebarDimType, sideDir, log);
+            }
+        }
+        else if (rebar2 != null)
+        {
+            // Горизонтального нет → привязочный размер от центра П-шки
+            // по вертикали к верхней/нижней грани стены.
+            CreatePShapeAnchorDimensions(doc, view, rebar2, rebarDimType, sideDir, log);
         }
 
-        string diagInfo = log.Length > 0 ? $"\n\nДиагностика:\n{log}" : string.Empty;
-        string rebar2Info = rebar2 != null ? rebar2.Id.IntegerValue.ToString() : "не найдена";
+        // Марка (если найдена П-шка на выбранной стороне)
+        if (rebar2 != null)
+            CreateCategoryTag(doc, view, rebar2, tagHead1, log);
 
-        TaskDialog.Show("Готово",
-            $"Горизонтальная рабочая: стержень {rebar1.Id.IntegerValue}\n" +
-            $"Правая П-шка (марка): {rebar2Info}" +
-            diagInfo);
-
-        return Result.Succeeded;
+        log.AppendLine($"{tag}: рабочая={(rebar1 != null ? rebar1.Id.IntegerValue.ToString() : "нет")}, " +
+                       $"П-шка={(rebar2 != null ? rebar2.Id.IntegerValue.ToString() : "нет")}.");
+        return true;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -202,10 +268,19 @@ public class WallRebarAnnotation : IExternalCommand
         double halfSpanMm = totalSpanMm / 2.0;
         double halfSpanFt = UnitUtils.ConvertToInternalUnits(halfSpanMm, UnitTypeId.Millimeters);
 
-        // ── Центр массива: первый стержень + dimDir * halfSpan ────────────────
-        // dimDir направлен в сторону распределения стержней в массиве,
-        // поэтому сдвигаем от первого стержня на половину суммарного шага.
-        XYZ arrayCenter = firstBarMid + dimDir * halfSpanFt;
+        // ── Центр массива — по габариту набора в виде (надёжная середина,
+        // не зависит от знака dimDir). При необходимости опускаем марку ниже.
+        XYZ arrayCenter;
+        BoundingBoxXYZ rbb = rebar.get_BoundingBox(view);
+        arrayCenter = (rbb != null)
+            ? rbb.Transform.OfPoint((rbb.Min + rbb.Max) / 2.0)
+            : firstBarMid + dimDir * halfSpanFt;
+
+        // Опускание марки MRA ниже центра набора (вдоль вертикали вида), мм.
+        // Марка П-шки привязана к этой же точке (tagHead1) и опустится вместе с ней.
+        const double MRA_MARK_DOWN_MM = 150;
+        double mraDownFt = UnitUtils.ConvertToInternalUnits(MRA_MARK_DOWN_MM, UnitTypeId.Millimeters);
+        arrayCenter = arrayCenter - view.UpDirection * mraDownFt;
 
         // Единственный тип аннотации
         MultiReferenceAnnotationType typeToUse = null;
@@ -278,11 +353,16 @@ public class WallRebarAnnotation : IExternalCommand
             return;
         }
 
-        double offsetUpFt = UnitUtils.ConvertToInternalUnits(350, UnitTypeId.Millimeters);
-        double offsetRightFt = UnitUtils.ConvertToInternalUnits(225, UnitTypeId.Millimeters);
+        // Вертикальный сдвиг марки относительно центра (мм): + вверх / − вниз.
+        // 0 = ровно по центру набора, рядом с маркой MRA.
+        const double TAG_VERTICAL_MM = 350;
+        double offsetUpFt = UnitUtils.ConvertToInternalUnits(TAG_VERTICAL_MM, UnitTypeId.Millimeters);
+        double offsetSideFt = UnitUtils.ConvertToInternalUnits(250, UnitTypeId.Millimeters);
         XYZ basePos = tagHead1 ?? (rebar.get_BoundingBox(view) is BoundingBoxXYZ bb2
             ? (bb2.Min + bb2.Max) / 2.0 : XYZ.Zero);
-        XYZ tagPos = basePos + view.UpDirection * offsetUpFt + view.RightDirection * offsetRightFt;
+        // Марку всегда сдвигаем к подписи аннотации (фиксированно вправо по виду),
+        // независимо от выбранной стороны — иначе слева она уезжает наружу.
+        XYZ tagPos = basePos + view.UpDirection * offsetUpFt + view.RightDirection * offsetSideFt;
 
         try
         {
@@ -316,6 +396,66 @@ public class WallRebarAnnotation : IExternalCommand
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Привязка П-шки к стене (когда нет горизонтального набора):
+    // вертикальные размеры от верхней/нижней грани стены к полкам П-шки.
+    // ─────────────────────────────────────────────────────────────────────────
+    private static void CreatePShapeAnchorDimensions(
+        Document doc, View view, Rebar pRebar,
+        DimensionType dimType, XYZ sideDir, System.Text.StringBuilder log)
+    {
+        XYZ dimDir = view.UpDirection;     // меряем по вертикали
+        XYZ legDir = view.RightDirection;  // полки П идут горизонтально
+
+        Wall wall = doc.GetElement(pRebar.GetHostId()) as Wall;
+        if (wall == null)
+        {
+            log.AppendLine("П-привязка: у П-шки нет хоста-стены.");
+            return;
+        }
+
+        // Линейные ссылки полок П (горизонтальные линии, ⟂ dimDir)
+        var legRefs = GetLineReferencesAlong(pRebar, view, legDir, dimDir, log, "П-полки");
+        if (legRefs.Count < 1)
+        {
+            log.AppendLine("П-привязка: не найдено горизонтальных линий полок П.");
+            return;
+        }
+        legRefs.Sort((a, b) => a.Coord.CompareTo(b.Coord));
+        RefWithCoord lowLeg = legRefs.First();   // нижняя полка
+        RefWithCoord highLeg = legRefs.Last();   // верхняя полка
+
+        // Грани стены по вертикали (верх/низ)
+        var wallRefs = GetWallFaceReferencesAlong(wall, view, dimDir, log, "стена(верх/низ)");
+        if (wallRefs.Count < 2)
+        {
+            log.AppendLine($"П-привязка: граней стены по вертикали найдено {wallRefs.Count} (нужно ≥2).");
+            return;
+        }
+        wallRefs.Sort((a, b) => a.Coord.CompareTo(b.Coord));
+        RefWithCoord wallLow = wallRefs.First();   // низ
+        RefWithCoord wallHigh = wallRefs.Last();   // верх
+
+        // Линию размеров ставим в 800 мм от края стены на ВЫБРАННОЙ стороне.
+        XYZ outDir = sideDir.Normalize();
+        double offsetFt = UnitUtils.ConvertToInternalUnits(800.0, UnitTypeId.Millimeters);
+        double wallEdge = WallExtentAlong(wall, view, outDir, log);
+        XYZ pMid = GetCurvesMidPoint(pRebar.GetCenterlineCurves(
+            false, false, false, MultiplanarOption.IncludeOnlyPlanarCurves, 0));
+        double targetOut = wallEdge + offsetFt;
+        XYZ basePt = ProjectOntoViewPlane(
+            pMid + outDir * (targetOut - pMid.DotProduct(outDir)), view);
+
+        // Низ стены → нижняя полка; верхняя полка → верх стены.
+        CreateOneCoverDim(doc, view, dimDir, basePt,
+            wallLow.Reference, wallLow.Coord, lowLeg.Reference, lowLeg.Coord,
+            dimType, log, "П-низ", null);
+
+        CreateOneCoverDim(doc, view, dimDir, basePt,
+            highLeg.Reference, highLeg.Coord, wallHigh.Reference, wallHigh.Coord,
+            dimType, log, "П-верх", null);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Размеры защитного слоя: торец стены → крайний стержень (с каждого края)
     // ─────────────────────────────────────────────────────────────────────────
     private struct RefWithCoord
@@ -326,7 +466,7 @@ public class WallRebarAnnotation : IExternalCommand
 
     private static void CreateCoverDimensions(
         Document doc, View view, Rebar rebar,
-        XYZ annotationPoint, DimensionType dimType,
+        XYZ annotationPoint, DimensionType dimType, XYZ sideDir,
         System.Text.StringBuilder log)
     {
         // 1. Направления массива из реальной геометрии (не зависим от ориентации разреза)
@@ -410,9 +550,9 @@ public class WallRebarAnnotation : IExternalCommand
         double upFt = UnitUtils.ConvertToInternalUnits(TEXT_UP_MM, UnitTypeId.Millimeters);
 
         XYZ up = view.UpDirection;
-        XYZ right = view.RightDirection;
-        XYZ diagUR = up * upFt + right * rightFt;  // вверх-вправо (для нижнего)
-        XYZ diagDR = -up * upFt + right * rightFt; // вниз-вправо (для верхнего)
+        XYZ right = sideDir.Normalize();           // горизонталь — на выбранную сторону
+        XYZ diagUR = up * upFt + right * rightFt;  // вверх-в сторону (для нижнего)
+        XYZ diagDR = -up * upFt + right * rightFt; // вниз-в сторону (для верхнего)
 
         // Точки на линии размера у торцов стены
         XYZ anchorLow = basePt + dimDir * (wallLow.Coord - basePtOnDim);
@@ -463,7 +603,9 @@ public class WallRebarAnnotation : IExternalCommand
             return result;
         }
 
+        int before = result.Count;
         CollectParallelLineRefs(geom, rebarDir, dimDir, result);
+        log.AppendLine($"Защ. слой [{tag}]: собрано ссылок {result.Count - before}.");
         return result;
     }
 
@@ -501,16 +643,35 @@ public class WallRebarAnnotation : IExternalCommand
                 continue;
             }
 
-            Line ln = obj as Line;
-            if (ln == null || ln.Reference == null) continue;
+            // Стержень показан «линией» — осевая приходит верхнеуровневым Line.
+            if (obj is Line ln)
+            {
+                TryAddParallelLineRef(ln, ln.Reference, rebarDir, dimDir, acc);
+                continue;
+            }
 
-            XYZ dir = ln.Direction.Normalize();
-            if (Math.Abs(dir.DotProduct(dimDir)) > 1e-3) continue;    // не ⟂ dimDir → пропуск
-            if (Math.Abs(dir.DotProduct(rebarDir)) < 0.99) continue;  // не вдоль стержня → пропуск
-
-            double coord = ln.GetEndPoint(0).DotProduct(dimDir);
-            acc.Add(new RefWithCoord { Reference = ln.Reference, Coord = coord });
+            // Стержень показан «телом» — берём рёбра солида (поверхностные линии).
+            if (obj is Solid solid && solid.Edges.Size > 0)
+            {
+                foreach (Edge e in solid.Edges)
+                {
+                    if (e.AsCurve() is Line el)
+                        TryAddParallelLineRef(el, e.Reference, rebarDir, dimDir, acc);
+                }
+            }
         }
+    }
+
+    // Добавляет ссылку, если линия идёт вдоль rebarDir (⟂ dimDir) и ссылка не null.
+    private static void TryAddParallelLineRef(
+        Line ln, Reference rf, XYZ rebarDir, XYZ dimDir, List<RefWithCoord> acc)
+    {
+        if (rf == null) return;
+        XYZ dir = ln.Direction.Normalize();
+        if (Math.Abs(dir.DotProduct(dimDir)) > 1e-3) return;    // не ⟂ dimDir
+        if (Math.Abs(dir.DotProduct(rebarDir)) < 0.99) return;  // не вдоль стержня
+        double coord = ln.GetEndPoint(0).DotProduct(dimDir);
+        acc.Add(new RefWithCoord { Reference = rf, Coord = coord });
     }
 
     // Сбор ссылок плоских граней стены, нормаль которых направлена вдоль dimDir.
@@ -639,63 +800,6 @@ public class WallRebarAnnotation : IExternalCommand
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Размер от крайних стержней rebar1 до границ стены-хоста (цепочка, не используется)
-    // ─────────────────────────────────────────────────────────────────────────
-    private static void CreateWallBoundaryDimension(
-        Document doc, View view, Rebar rebar,
-        XYZ annotationPoint, XYZ dimDir,
-        Reference refWallBottom, Reference refWallTop,
-        Reference refRebarFirst, Reference refRebarLast,
-        DimensionType dimType,
-        System.Text.StringBuilder log)
-    {
-        // Геометрия первого стержня для определения направления и точки линии размера
-        IList<Curve> firstCurves = rebar.GetCenterlineCurves(
-            false, false, false, MultiplanarOption.IncludeOnlyPlanarCurves, 0);
-
-        if (firstCurves == null || firstCurves.Count == 0)
-        {
-            log.AppendLine($"Rebar {rebar.Id}: нет кривых центральной оси.");
-            return;
-        }
-
-        GetRebarDirAndMid(firstCurves, out XYZ rebarDir, out XYZ firstMid);
-
-        // Линия размера — на той же горизонтальной позиции что и аннотация
-        XYZ ap = ProjectOntoViewPlane(annotationPoint, view);
-        double pos = ap.DotProduct(dimDir);
-        XYZ dimMid = firstMid + dimDir * (pos - firstMid.DotProduct(dimDir));
-
-        Line dimLine = TryCreateDimLine(dimMid, rebarDir, view.Origin.Z);
-        if (dimLine == null)
-        {
-            log.AppendLine($"Rebar {rebar.Id}: не удалось создать линию размера.");
-            return;
-        }
-
-        // Цепочка: низ стены → первый стержень → последний стержень → верх стены
-        var ra = new ReferenceArray();
-        ra.Append(refWallBottom);
-        ra.Append(refRebarFirst);
-        ra.Append(refRebarLast);
-        ra.Append(refWallTop);
-
-        try
-        {
-            Dimension dim = dimType != null
-                ? doc.Create.NewDimension(view, dimLine, ra, dimType)
-                : doc.Create.NewDimension(view, dimLine, ra);
-
-            if (dim == null)
-                log.AppendLine($"Rebar {rebar.Id}: NewDimension вернул null.");
-        }
-        catch (Exception ex)
-        {
-            log.AppendLine($"Rebar {rebar.Id}: ОШИБКА NewDimension — {ex.Message}");
-        }
-    }
-
     // ─── Вспомогательные методы ───────────────────────────────────────────────
 
     private static void GetRebarDirAndMid(IList<Curve> curves, out XYZ dir, out XYZ mid)
@@ -733,18 +837,6 @@ public class WallRebarAnnotation : IExternalCommand
             (pts.Min(p => p.Z) + pts.Max(p => p.Z)) / 2.0);
     }
 
-    private static Line TryCreateDimLine(XYZ mid, XYZ dir, double z)
-    {
-        if (dir.GetLength() < 1e-9) return null;
-        XYZ d = dir.Normalize();
-        double half = 2.0; // 2 фута — заведомо достаточно
-        XYZ p1 = new XYZ((mid - d * half).X, (mid - d * half).Y, z);
-        XYZ p2 = new XYZ((mid + d * half).X, (mid + d * half).Y, z);
-        if ((p2 - p1).GetLength() < 0.1) return null;
-        try { return Line.CreateBound(p1, p2); }
-        catch { return null; }
-    }
-
     private static XYZ SafeCrossProduct(XYZ a, XYZ b)
     {
         XYZ cross = a.CrossProduct(b);
@@ -776,6 +868,27 @@ public class WallRebarAnnotation : IExternalCommand
         if (dR >= dU * 2.0) return "Гориз";
         if (dU >= dR * 2.0) return "Верт";
         return "Гнутый";                              // П / хомут в плоскости вида
+    }
+
+    // Горизонтальная ли П-шка: у равносторонней П две полки параллельны, основание
+    // перпендикулярно. У горизонтальной П полки идут вдоль RightDirection (их 2 из 3),
+    // у вертикальной — вдоль UpDirection. Считаем, каких прямых сегментов больше.
+    private static bool IsHorizontalPShape(Rebar rb, View view)
+    {
+        XYZ R = view.RightDirection, U = view.UpDirection;
+        IList<Curve> cs = rb.GetCenterlineCurves(
+            false, false, false, MultiplanarOption.IncludeOnlyPlanarCurves, 0);
+        if (cs == null || cs.Count == 0) return false;
+
+        int rCount = 0, uCount = 0;
+        foreach (Curve c in cs)
+        {
+            if (!(c is Line)) continue; // только прямые сегменты (полки/основание)
+            XYZ d = (c.GetEndPoint(1) - c.GetEndPoint(0)).Normalize();
+            if (Math.Abs(d.DotProduct(R)) >= Math.Abs(d.DotProduct(U))) rCount++;
+            else uCount++;
+        }
+        return rCount > uCount; // горизонтальная П: сегментов вдоль горизонтали больше
     }
 
     private static double Extent(List<XYZ> pts, XYZ dir)
@@ -820,12 +933,54 @@ public class WallRebarAnnotation : IExternalCommand
         return sh?.Name ?? string.Empty;
     }
 
+    // Стержень считается «в обрезке», если его габарит целиком попадает в рамку
+    // подрезки вида (по осям X/Y вида). Если обрезка не активна — true (берём всё).
+    // Если хоть один угол габарита вне рамки — false (часть за обрезкой).
+    private static bool IsInsideCrop(View view, Rebar rebar)
+    {
+        if (!view.CropBoxActive) return true;
+
+        BoundingBoxXYZ crop = view.CropBox;
+        if (crop == null) return true;
+
+        BoundingBoxXYZ bb = rebar.get_BoundingBox(view);
+        if (bb == null) return true; // не смогли определить — не исключаем
+
+        Transform toCrop = crop.Transform.Inverse;
+        double tol = 1e-4; // ~0.03 мм, чтобы не дёргаться на границе
+
+        foreach (XYZ corner in BoxCornersModel(bb))
+        {
+            XYZ l = toCrop.OfPoint(corner);
+            if (l.X < crop.Min.X - tol || l.X > crop.Max.X + tol ||
+                l.Y < crop.Min.Y - tol || l.Y > crop.Max.Y + tol)
+                return false; // угол за рамкой → часть стержня за обрезкой
+        }
+        return true;
+    }
+
+    // 8 углов BoundingBoxXYZ в модельных координатах.
+    private static IEnumerable<XYZ> BoxCornersModel(BoundingBoxXYZ bb)
+    {
+        Transform tf = bb.Transform;
+        XYZ mn = bb.Min, mx = bb.Max;
+        for (int i = 0; i < 8; i++)
+        {
+            XYZ p = new XYZ(
+                (i & 1) == 0 ? mn.X : mx.X,
+                (i & 2) == 0 ? mn.Y : mx.Y,
+                (i & 4) == 0 ? mn.Z : mx.Z);
+            yield return tf.OfPoint(p);
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // Авто-точка размещения аннотаций: offsetMm от грани стены, вбок (вдоль стержней),
-    // на уровне центра набора. Сторона — в сторону RightDirection вида.
+    // Авто-точка размещения аннотаций: offsetMm от грани стены на стороне sideDir,
+    // на уровне центра набора.
     // ─────────────────────────────────────────────────────────────────────────
     private static XYZ ComputeAutoAnnotationPoint(
-        Document doc, View view, Rebar rebar, double offsetMm, System.Text.StringBuilder log)
+        Document doc, View view, Rebar rebar, double offsetMm, XYZ sideDir,
+        System.Text.StringBuilder log)
     {
         IList<Curve> curves = rebar.GetCenterlineCurves(
             false, false, false, MultiplanarOption.IncludeOnlyPlanarCurves, 0);
@@ -835,10 +990,8 @@ public class WallRebarAnnotation : IExternalCommand
             return null;
         }
 
-        GetRebarDirAndMid(curves, out XYZ rebarDir, out XYZ _);
-
-        // Сторона размещения — туда, куда смотрит «вправо» на виде.
-        XYZ outDir = rebarDir.DotProduct(view.RightDirection) >= 0 ? rebarDir : rebarDir.Negate();
+        // Сторона размещения — выбранная пользователем.
+        XYZ outDir = sideDir.Normalize();
 
         Wall wall = doc.GetElement(rebar.GetHostId()) as Wall;
         if (wall == null)

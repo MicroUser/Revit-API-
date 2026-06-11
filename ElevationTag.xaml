@@ -212,10 +212,16 @@
         <Border Height="1" Background="#E5E7EB" Margin="0 16 0 16"/>
 
         <!-- Чекбоксы -->
+        <CheckBox x:Name="ChkCreateSections"
+                  Style="{StaticResource ModernCheckBox}"
+                  Content="Создать разрезы"
+                  IsChecked="True"/>
+
         <CheckBox x:Name="ChkCreateBreak"
                   Style="{StaticResource ModernCheckBox}"
                   Content="Создать разрыв вида"
                   IsChecked="True"
+                  Margin="0 8 0 0"
                   Checked="ChkCreateBreak_Changed"
                   Unchecked="ChkCreateBreak_Changed"/>
 

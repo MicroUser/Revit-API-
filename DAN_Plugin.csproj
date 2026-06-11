@@ -78,6 +78,7 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="WallRebarAnnotation.cs" />
+    <Compile Include="WallSectionRebarTags.cs" />
     <Compile Include="RebarAnnotation.cs" />
     <Compile Include="NametoMark.cs" />
     <Compile Include="Collisions.cs" />

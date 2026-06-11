@@ -48,7 +48,7 @@ namespace DAN_Plugin
                     if (elem == null) continue;
 
                     Parameter param = elem.LookupParameter(parameterName);
-                    if (param == null || param.IsReadOnly) ;
+                    if (param == null || param.IsReadOnly) 
                     param.Set(string.Empty);
 
                     clearedCount++;

@@ -40,6 +40,7 @@ namespace DAN_Plugin
     {
         public bool CreateBreak { get; private set; }
         public bool Recreate { get; private set; }
+        public bool CreateSections { get; private set; }
         public List<BreakRange> BreakRanges { get; private set; } = new List<BreakRange>();
 
         private readonly ObservableCollection<BreakRangeRow> _rows =
@@ -140,6 +141,7 @@ namespace DAN_Plugin
         {
             CreateBreak = ChkCreateBreak.IsChecked == true;
             Recreate = ChkRecreate.IsChecked == true;
+            CreateSections = ChkCreateSections.IsChecked == true;
 
             BreakRanges.Clear();
             if (CreateBreak)
