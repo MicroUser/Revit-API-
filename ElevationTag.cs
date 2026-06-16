@@ -14,6 +14,7 @@ namespace DAN_Plugin
         public bool AllowReference(Reference reference, XYZ position) => false;
     }
 
+
     [Transaction(TransactionMode.Manual)]
     public class CreatElevationTags : IExternalCommand
     {
@@ -77,6 +78,7 @@ namespace DAN_Plugin
             bool recreate = settingsWindow.Recreate;
             bool createSections = settingsWindow.CreateSections;
             List<BreakRange> breakRanges = settingsWindow.BreakRanges;
+
 
             // Шаг 3: пересоздание — удаляем существующие разрывы, линии разрыва, отметки и размеры
             if (recreate)
@@ -276,7 +278,6 @@ namespace DAN_Plugin
                 .OfClass(typeof(Floor))
                 .WhereElementIsNotElementType()
                 .Cast<Floor>()
-                .Where(f => f.Category?.Id.IntegerValue != (int)BuiltInCategory.OST_StructuralFoundation)
                 .Where(f =>
                 {
                     ElementId asmId = f.AssemblyInstanceId;
@@ -333,6 +334,16 @@ namespace DAN_Plugin
             foreach (Element elem in walls.Concat(floors))
             {
                 bool isWall = elem is Wall;
+
+                // Кривая стена (дуга, сплайн) — пропускаем: горизонтальные грани могут быть
+                // получены некорректно, а нужные Z-уровни уже покрыты смежными плитами.
+                if (isWall)
+                {
+                    LocationCurve lc = (elem as Wall).Location as LocationCurve;
+                    if (!(lc?.Curve is Line))
+                        continue;
+                }
+
                 GetTopAndBottomFaces(elem, section, rightVec, out FaceData topFace, out FaceData botFace);
 
                 foreach (FaceData fd in new[] { topFace, botFace })
@@ -365,9 +376,9 @@ namespace DAN_Plugin
 
             double bendGap = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters);
             double dimProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1000, UnitTypeId.Millimeters);
-            double dimOddProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1500, UnitTypeId.Millimeters);
-            double dimTotalProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1850, UnitTypeId.Millimeters);
-            double tagProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1850, UnitTypeId.Millimeters);
+            double dimOddProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1350, UnitTypeId.Millimeters);
+            double dimTotalProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1700, UnitTypeId.Millimeters);
+            double tagProj = globalMinRight - UnitUtils.ConvertToInternalUnits(1700, UnitTypeId.Millimeters);
 
             XYZ MakePoint(double rightProj, double depth, double z) =>
                 rightVec.Multiply(rightProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
@@ -496,7 +507,7 @@ namespace DAN_Plugin
                 // (высота + привязка к низу стены; ширина + привязка к оси/торцу)
                 foreach (Wall w in walls.OfType<Wall>())
                 {
-                    try { openingsFound += CreateOpeningDimensions(doc, section, w, rightVec, viewDir); }
+                    try { openingsFound += CreateOpeningDimensions(doc, section, w, rightVec, viewDir, hiddenZones); }
                     catch (Exception ex) { TaskDialog.Show("Предупреждение (проёмы)", ex.Message); }
                 }
 
@@ -533,29 +544,206 @@ namespace DAN_Plugin
                 .OfType<Wall>()
                 .ToList();
 
-            // Категоризация стен: новый вид — при смене толщины, ссылочный разрез — при повторении
-            // isNew=true: создаём новый вид с индексом sectionIdx
+            // Геометрический ключ стены: "толщинаМм|Ш1xВ1,Ш2xВ2,..." (проёмы отсортированы).
+            // Новый разрез нужен при любом отличии ключа — изменилась толщина, количество
+            // проёмов или размеры хотя бы одного из них.
+            string WallGeomKey(Wall w)
+            {
+                int thkMm = (int)Math.Round(
+                    UnitUtils.ConvertFromInternalUnits(WallThickness(w), UnitTypeId.Millimeters));
+
+                // Опорная точка стены: левый нижний угол (для относительных координат проёмов)
+                BoundingBoxXYZ wallBb = w.get_BoundingBox(null);
+                double wallMinR = (wallBb != null)
+                    ? new[] { wallBb.Min.X, wallBb.Max.X }
+                        .SelectMany(bx => new[] { wallBb.Min.Y, wallBb.Max.Y }
+                            .Select(by => new XYZ(bx, by, 0).DotProduct(rightVec)))
+                        .Min()
+                    : 0.0;
+                double wallBotZ  = wallBb?.Min.Z ?? 0.0;
+                double wallHeight = wallBb != null ? wallBb.Max.Z - wallBb.Min.Z : double.MaxValue;
+
+                var openings = new List<(double minR, double maxR, double botZ, double topZ)>();
+
+                // Проверяем оба режима геометрии:
+                // — без вида: SolidSolidCutUtils-резы и hosted-семейства всегда видны
+                // — с видом: профильные проёмы (OpeningBySketch) видны только view-dependent
+                // Результаты объединяем; дубликаты уберёт деdup по позиции ниже.
+                var geomSources = new List<GeometryElement>();
+                GeometryElement geomNoView = w.get_Geometry(new Options { ComputeReferences = false });
+                if (geomNoView != null) geomSources.Add(geomNoView);
+                GeometryElement geomWithView = w.get_Geometry(new Options { ComputeReferences = false, View = section });
+                if (geomWithView != null) geomSources.Add(geomWithView);
+                foreach (GeometryElement geomSrc in geomSources)
+                {
+                    foreach (GeometryObject go in geomSrc)
+                    {
+                        Solid s = go as Solid;
+                        if (s == null || s.Faces.IsEmpty) continue;
+                        foreach (Face f in s.Faces)
+                        {
+                            PlanarFace pf = f as PlanarFace;
+                            if (pf == null) continue;
+                            if (Math.Abs(pf.FaceNormal.Z) > 1e-3) continue;
+                            // Пропускаем только торцы стены (норм. параллельна длине стены = rightVec);
+                            // проверяем и переднюю, и заднюю грань (дубликаты уберёт deduplicate ниже).
+                            if (Math.Abs(pf.FaceNormal.DotProduct(rightVec)) > 0.7) continue;
+
+                            IList<CurveLoop> loops;
+                            try { loops = pf.GetEdgesAsCurveLoops(); } catch { continue; }
+                            if (loops == null || loops.Count < 2) continue;
+
+                            // Внешний контур — с наибольшей площадью (ширина × высота)
+                            var boxes = loops.Select(loop =>
+                            {
+                                double mn = double.MaxValue, mx = double.MinValue;
+                                double bz = double.MaxValue, tz = double.MinValue;
+                                foreach (Curve c in loop)
+                                    foreach (XYZ p in c.Tessellate())
+                                    {
+                                        double r = p.DotProduct(rightVec);
+                                        if (r < mn) mn = r; if (r > mx) mx = r;
+                                        if (p.Z < bz) bz = p.Z; if (p.Z > tz) tz = p.Z;
+                                    }
+                                return (mn, mx, bz, tz);
+                            }).ToList();
+
+                            int outerIdx = -1; double maxArea = double.MinValue;
+                            for (int li = 0; li < boxes.Count; li++)
+                            {
+                                double a = (boxes[li].mx - boxes[li].mn) * (boxes[li].tz - boxes[li].bz);
+                                if (a > maxArea) { maxArea = a; outerIdx = li; }
+                            }
+
+                            double outerMinR = boxes[outerIdx].mn;
+                            double outerMaxR = boxes[outerIdx].mx;
+                            // Допуск: 30 мм — колонны/стены примыкают вплотную к торцу
+                            double edgeTol = UnitUtils.ConvertToInternalUnits(30, UnitTypeId.Millimeters);
+
+                            for (int li = 0; li < boxes.Count; li++)
+                            {
+                                if (li == outerIdx) continue;
+                                // Артефакт примыкания: inner loop прижат к левому или правому
+                                // торцу внешнего контура (колонна/стена срезает грань по краю).
+                                // Реальные проёмы (окна, двери, профильные вырезы) расположены
+                                // внутри грани и не касаются горизонтальных краёв.
+                                bool touchesLeft  = Math.Abs(boxes[li].mn - outerMinR) < edgeTol;
+                                bool touchesRight = Math.Abs(boxes[li].mx - outerMaxR) < edgeTol;
+                                if (touchesLeft || touchesRight) continue;
+                                openings.Add((boxes[li].mn, boxes[li].mx, boxes[li].bz, boxes[li].tz));
+                            }
+                        }
+                    }
+                }
+
+                // Детектирование через зависимые элементы (wall-hosted Generic Models)
+                try
+                {
+                    var gmFilter = new ElementCategoryFilter(BuiltInCategory.OST_GenericModel);
+                    foreach (ElementId depId in w.GetDependentElements(gmFilter))
+                    {
+                        FamilyInstance fi = doc.GetElement(depId) as FamilyInstance;
+                        if (fi == null) continue;
+                        BoundingBoxXYZ fiBb = fi.get_BoundingBox(null);
+                        if (fiBb == null) continue;
+                        double minR2 = double.MaxValue, maxR2 = double.MinValue;
+                        foreach (XYZ corner in new[] {
+                            new XYZ(fiBb.Min.X, fiBb.Min.Y, 0), new XYZ(fiBb.Max.X, fiBb.Min.Y, 0),
+                            new XYZ(fiBb.Min.X, fiBb.Max.Y, 0), new XYZ(fiBb.Max.X, fiBb.Max.Y, 0) })
+                        {
+                            double r = corner.DotProduct(rightVec);
+                            if (r < minR2) minR2 = r;
+                            if (r > maxR2) maxR2 = r;
+                        }
+                        openings.Add((minR2, maxR2, fiBb.Min.Z, fiBb.Max.Z));
+                    }
+                }
+                catch { }
+
+                // Дедупликация по горизонтальной позиции (допуск 100 мм):
+                // один и тот же проём детектируется из нескольких источников / граней.
+                var dedupedOpenings = openings
+                    .GroupBy(o => (
+                        (int)Math.Round(UnitUtils.ConvertFromInternalUnits(o.minR - wallMinR, UnitTypeId.Millimeters) / 100.0),
+                        (int)Math.Round(UnitUtils.ConvertFromInternalUnits(o.maxR - wallMinR, UnitTypeId.Millimeters) / 100.0)
+                    ))
+                    .Select(g => g.OrderByDescending(o => o.topZ - o.botZ).First())
+                    .ToList();
+
+                if (!dedupedOpenings.Any())
+                    return $"{thkMm}";
+
+                var sigs = dedupedOpenings.Select(o =>
+                {
+                    int posL = (int)Math.Round(UnitUtils.ConvertFromInternalUnits(o.minR - wallMinR, UnitTypeId.Millimeters));
+                    int wid  = (int)Math.Round(UnitUtils.ConvertFromInternalUnits(o.maxR - o.minR, UnitTypeId.Millimeters));
+                    return $"{posL},{wid}";
+                }).OrderBy(s => s).ToList();
+
+                return $"{thkMm}|{string.Join(";", sigs)}";
+            }
+
+            // Группируем стены по этажу (одинаковая нижняя отметка ±50мм) и сортируем по Z.
+            // Разрез создаётся на группу (этаж), а не на отдельную стену:
+            // если суммарный ключ группы изменился — новый разрез, иначе — ссылочный.
+            // isNew=true: создаём новый вид с индексом sectionIdx (репрезентативная стена этажа)
             // isNew=false: создаём ссылочный разрез на вид с индексом refToIdx
+            double levelTol = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+
             var sortedWallsAll = assemblyWalls
-                .Select(w => new { Wall = w, Bottom = WallBottomZ(w), Thickness = WallThickness(w) })
+                .Select(w => new { Wall = w, Bottom = WallBottomZ(w) })
                 .OrderBy(x => x.Bottom)
                 .ToList();
 
-            var wallPlan = new List<(Wall wall, bool isNew, int sectionIdx, int refToIdx)>();
-            double prevThk = double.NaN;
-            int sectionCounter = 0, lastNewIdx = 0;
+            // Разбиваем на группы-этажи: стены с близким bottom Z попадают в одну группу
+            var floorGroups = new List<List<Wall>>();
             foreach (var x in sortedWallsAll)
             {
-                if (double.IsNaN(prevThk) || Math.Abs(x.Thickness - prevThk) > thkTol)
+                if (floorGroups.Count == 0 ||
+                    Math.Abs(x.Bottom - WallBottomZ(floorGroups.Last().First())) > levelTol)
+                    floorGroups.Add(new List<Wall>());
+                floorGroups.Last().Add(x.Wall);
+            }
+
+            // Ключ этажа = объединение ключей всех стен на нём (сортированных, порядок не важен)
+            string FloorKey(List<Wall> fw) =>
+                string.Join("+", fw.Select(w => WallGeomKey(w)).OrderBy(k => k));
+
+            var wallPlan = new List<(Wall wall, bool isNew, int sectionIdx, int refToIdx)>();
+            var sectionFloorWalls = new Dictionary<int, List<Wall>>();  // sectionIdx → все стены этажа
+            int sectionCounter = 0;
+            int lastNewSectionIdx = -1;
+            string lastKey = null;
+
+            foreach (var floorWalls in floorGroups)
+            {
+                string key = FloorKey(floorWalls);
+                bool isNew = key != lastKey;
+
+                if (isNew)
                 {
                     sectionCounter++;
-                    wallPlan.Add((x.Wall, true, sectionCounter, -1));
-                    lastNewIdx = sectionCounter;
-                    prevThk = x.Thickness;
+                    lastNewSectionIdx = sectionCounter;
+                    lastKey = key;
+                }
+
+                // Репрезентативная стена для создания разреза — самая длинная прямая стена этажа
+                Wall repWall = floorWalls
+                    .Where(w => (w.Location as LocationCurve)?.Curve is Line)
+                    .OrderByDescending(w => ((w.Location as LocationCurve).Curve as Line).Length)
+                    .FirstOrDefault() ?? floorWalls.First();
+
+                if (isNew)
+                {
+                    sectionFloorWalls[sectionCounter] = floorWalls;
+                    wallPlan.Add((repWall, true, sectionCounter, -1));
+                    foreach (Wall w in floorWalls.Where(w => w.Id != repWall.Id))
+                        wallPlan.Add((w, false, -1, sectionCounter));
                 }
                 else
                 {
-                    wallPlan.Add((x.Wall, false, -1, lastNewIdx));
+                    foreach (Wall w in floorWalls)
+                        wallPlan.Add((w, false, -1, lastNewSectionIdx));
                 }
             }
 
@@ -593,10 +781,8 @@ namespace DAN_Plugin
                             {
                                 createdSections[entry.sectionIdx] = vs;
                                 sectionsCreated++;
-                                try { CreateWallSectionDimensions(doc, vs, entry.wall, rightVec); }
+                                try { CreateWallSectionDimensions(doc, vs, entry.wall, sectionFloorWalls[entry.sectionIdx], rightVec); }
                                 catch (Exception ex) { TaskDialog.Show("Предупреждение (размеры разреза)", ex.Message); }
-                                try { WallSectionRebarTagger.Run(doc, vs, entry.wall, rightVec); }
-                                catch (Exception ex) { TaskDialog.Show("Предупреждение (марки арматуры)", ex.Message); }
                             }
                         }
                         catch (Exception ex)
@@ -606,22 +792,35 @@ namespace DAN_Plugin
                         }
                     }
 
-                    // Шаг 2: ссылочные разрезы для этажей с той же толщиной стены
-                    foreach (var entry in wallPlan.Where(p => !p.isNew))
+                    // Шаг 2: один ссылочный разрез на каждый этаж без нового разреза
+                    foreach (var floorWalls in floorGroups)
                     {
-                        if (!createdSections.TryGetValue(entry.refToIdx, out ViewSection target)) continue;
+                        // Этаж с новым разрезом — уже обработан в Шаге 1, пропускаем
+                        if (wallPlan.Any(p => floorWalls.Any(fw => fw.Id == p.wall.Id) && p.isNew))
+                            continue;
+
+                        var firstEntry = wallPlan.FirstOrDefault(p => floorWalls.Any(fw => fw.Id == p.wall.Id));
+                        if (firstEntry.wall == null) continue;
+                        if (!createdSections.TryGetValue(firstEntry.refToIdx, out ViewSection target)) continue;
+
+                        // Репрезентативная стена этажа — самая длинная прямая
+                        Wall repWall = floorWalls
+                            .Where(w => (w.Location as LocationCurve)?.Curve is Line)
+                            .OrderByDescending(w => ((w.Location as LocationCurve).Curve as Line).Length)
+                            .FirstOrDefault() ?? floorWalls.First();
+
                         try
                         {
-                            BoundingBoxXYZ bb = entry.wall.get_BoundingBox(null);
+                            BoundingBoxXYZ bb = repWall.get_BoundingBox(null);
                             double cz = (bb.Min.Z + bb.Max.Z) / 2.0;
                             if (hiddenZones.Any(hz => cz > hz.bottom && cz < hz.top)) continue;
-                            CreateReferenceWallSection(doc, entry.wall, cz, rightVec, section, target);
+                            CreateReferenceWallSection(doc, cz, rightVec, section, target);
                             refSectionsCreated++;
                         }
                         catch (Exception ex)
                         {
                             TaskDialog.Show("Предупреждение (ссылочный разрез)",
-                                $"Стена Id={entry.wall.Id}: {ex.GetType().Name}: {ex.Message}");
+                                $"Стена Id={repWall.Id}: {ex.GetType().Name}: {ex.Message}");
                         }
                     }
 
@@ -636,7 +835,7 @@ namespace DAN_Plugin
             resultMsg = $"Сборка: {assemblyComment}\n" +
                         $"Создано отметок: {createdCount} из {allFaces.Count}\n" +
                         $"Создано разрезов: {sectionsStr}\n" +
-                        $"Найдено проемов: {openingsFound}";
+                        $"Образмерено проёмов: {openingsFound}";
             if (createBreak) resultMsg += "\n\n⚠ Подвиньте части разрыва вручную через синие ручки на виде.";
 
             TaskDialog.Show("Готово", resultMsg);
@@ -661,6 +860,16 @@ namespace DAN_Plugin
 
             double depth = section.Origin.DotProduct(viewDir);
 
+            // Границы crop box вида (без отступа — реальная линия обрезки)
+            BoundingBoxXYZ cropBox = section.CropBox;
+            Transform ct = cropBox.Transform;
+            double cropLeftEdge = Math.Min(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
+                                            ct.OfPoint(cropBox.Max).DotProduct(rightVec));
+            double cropRightEdge = Math.Max(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
+                                             ct.OfPoint(cropBox.Max).DotProduct(rightVec));
+
+            Solid masterCropSolid = BuildCropBoxSolid(cropBox);
+
             foreach (Element floor in floors)
             {
                 GetTopAndBottomFaces(floor, section, rightVec,
@@ -677,25 +886,30 @@ namespace DAN_Plugin
 
                 if (Math.Abs(topZ - botZ) < 1e-6) continue;
 
-                // Края плиты
-                double floorLeftProj = topFace.LeftProj;
-                double floorRightProj = topFace.RightProj;
+                // Реальный видимый диапазон плиты, обрезанный по объёму crop box вида.
+                // Если булева операция не удалась — используем нескорректированные края грани.
+                bool clipped = TryGetClippedHorizontalRange(floor, masterCropSolid, rightVec,
+                    out double clippedLeft, out double clippedRight);
+                double floorLeftProj = clipped ? clippedLeft : topFace.LeftProj;
+                double floorRightProj = clipped ? clippedRight : topFace.RightProj;
 
                 // Позиции линий разрыва — 100 мм от края вида
-                BoundingBoxXYZ cropBox = section.CropBox;
-                Transform ct = cropBox.Transform;
                 double offset100 = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
-                double leftProj = Math.Min(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
-                                            ct.OfPoint(cropBox.Max).DotProduct(rightVec)) + offset100;
-                double rightProj = Math.Max(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
-                                            ct.OfPoint(cropBox.Max).DotProduct(rightVec)) - offset100;
+                double leftProj = cropLeftEdge + offset100;
+                double rightProj = cropRightEdge - offset100;
 
                 XYZ MakePt(double proj, double z) =>
                     rightVec.Multiply(proj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
 
-                // Левая линия — только если плита выступает левее стены (с допуском 1 мм)
                 double edgeTolerance = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
-                if (floorLeftProj < globalMinRight - edgeTolerance)
+
+                // Левая линия — только если плита пересекает левую границу crop box.
+                // Для обрезанной геометрии граница "касания" — это сама граница crop box (изнутри),
+                // для запасного варианта (геометрия не обрезана) — реальное пересечение границы.
+                bool leftPastCrop = clipped
+                    ? floorLeftProj < cropLeftEdge + edgeTolerance
+                    : floorLeftProj < cropLeftEdge - edgeTolerance;
+                if (leftPastCrop)
                 {
                     Line lineLeft = Line.CreateBound(MakePt(leftProj, botZ), MakePt(leftProj, topZ));
                     FamilyInstance leftInst = doc.Create.NewFamilyInstance(lineLeft, breakLineSymbol, section);
@@ -708,8 +922,11 @@ namespace DAN_Plugin
                     }
                 }
 
-                // Правая линия — только если плита выступает правее стены (с допуском 1 мм)
-                if (floorRightProj > globalMaxRight + edgeTolerance)
+                // Правая линия — аналогично, с учётом того, обрезана ли геометрия
+                bool rightPastCrop = clipped
+                    ? floorRightProj > cropRightEdge - edgeTolerance
+                    : floorRightProj > cropRightEdge + edgeTolerance;
+                if (rightPastCrop)
                 {
                     Line lineRight = Line.CreateBound(MakePt(rightProj, botZ), MakePt(rightProj, topZ));
                     doc.Create.NewFamilyInstance(lineRight, breakLineSymbol, section);
@@ -831,8 +1048,6 @@ namespace DAN_Plugin
             PlanarFace topFace = null, botFace = null;
             double maxZ = double.MinValue;
             double minZ = double.MaxValue;
-            double minProj = double.MaxValue;
-            double maxProj = double.MinValue;
 
             foreach (GeometryObject geomObj in geomElem)
             {
@@ -849,40 +1064,136 @@ namespace DAN_Plugin
 
                     if (Math.Abs(pFace.FaceNormal.Z + 1.0) < 1e-6 && pFace.Origin.Z < minZ)
                     { minZ = pFace.Origin.Z; botFace = pFace; }
-
-                    foreach (EdgeArray edgeLoop in pFace.EdgeLoops)
-                        foreach (Edge edge in edgeLoop)
-                            foreach (XYZ pt in edge.Tessellate())
-                            {
-                                double proj = pt.DotProduct(rightVec);
-                                if (proj < minProj) minProj = proj;
-                                if (proj > maxProj) maxProj = proj;
-                            }
                 }
             }
 
             XYZ Center(PlanarFace f) => f.Evaluate((f.GetBoundingBox().Min + f.GetBoundingBox().Max) / 2.0);
 
+            (double min, double max) ProjRange(PlanarFace f)
+            {
+                double mn = double.MaxValue, mx = double.MinValue;
+                foreach (EdgeArray edgeLoop in f.EdgeLoops)
+                    foreach (Edge edge in edgeLoop)
+                        foreach (XYZ pt in edge.Tessellate())
+                        {
+                            double proj = pt.DotProduct(rightVec);
+                            if (proj < mn) mn = proj;
+                            if (proj > mx) mx = proj;
+                        }
+                return (mn, mx);
+            }
+
             if (topFace != null)
+            {
+                var (mn, mx) = ProjRange(topFace);
                 topFaceData = new FaceData
                 {
                     Elem = elem,
                     FaceRef = topFace.Reference,
                     FacePoint = Center(topFace),
-                    LeftProj = minProj,
-                    RightProj = maxProj,
+                    LeftProj = mn,
+                    RightProj = mx,
                     IsTop = true
                 };
+            }
             if (botFace != null)
+            {
+                var (mn, mx) = ProjRange(botFace);
                 botFaceData = new FaceData
                 {
                     Elem = elem,
                     FaceRef = botFace.Reference,
                     FacePoint = Center(botFace),
-                    LeftProj = minProj,
-                    RightProj = maxProj,
+                    LeftProj = mn,
+                    RightProj = mx,
                     IsTop = false
                 };
+            }
+        }
+
+        private Solid BuildCropBoxSolid(BoundingBoxXYZ box)
+        {
+            Transform t = box.Transform;
+            XYZ mn = box.Min, mx = box.Max;
+            if (mx.X - mn.X < 1e-6 || mx.Y - mn.Y < 1e-6 || mx.Z - mn.Z < 1e-6) return null;
+
+            XYZ p0 = t.OfPoint(new XYZ(mn.X, mn.Y, mn.Z));
+            XYZ p1 = t.OfPoint(new XYZ(mx.X, mn.Y, mn.Z));
+            XYZ p2 = t.OfPoint(new XYZ(mx.X, mx.Y, mn.Z));
+            XYZ p3 = t.OfPoint(new XYZ(mn.X, mx.Y, mn.Z));
+            XYZ extrudeDir = t.OfVector(XYZ.BasisZ).Normalize();
+            double height = mx.Z - mn.Z;
+
+            CurveLoop BuildLoop(bool reverse)
+            {
+                XYZ[] pts = reverse ? new[] { p0, p3, p2, p1 } : new[] { p0, p1, p2, p3 };
+                CurveLoop cl = new CurveLoop();
+                for (int i = 0; i < 4; i++)
+                    cl.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]));
+                return cl;
+            }
+
+            try
+            {
+                return GeometryCreationUtilities.CreateExtrusionGeometry(
+                    new List<CurveLoop> { BuildLoop(false) }, extrudeDir, height);
+            }
+            catch
+            {
+                try
+                {
+                    return GeometryCreationUtilities.CreateExtrusionGeometry(
+                        new List<CurveLoop> { BuildLoop(true) }, extrudeDir, height);
+                }
+                catch { return null; }
+            }
+        }
+
+        // Реальный видимый (обрезанный crop box'ом) горизонтальный диапазон верхней грани элемента.
+        // Возвращает false, если не удалось вычислить (тогда нужно использовать запасной вариант).
+        private bool TryGetClippedHorizontalRange(Element elem, Solid masterCropSolid, XYZ rightVec,
+            out double clippedLeft, out double clippedRight)
+        {
+            clippedLeft = double.MaxValue;
+            clippedRight = double.MinValue;
+            if (masterCropSolid == null) return false;
+
+            GeometryElement geom = elem.get_Geometry(new Options { ComputeReferences = false, DetailLevel = ViewDetailLevel.Fine });
+            if (geom == null) return false;
+
+            bool found = false;
+            foreach (GeometryObject go in geom)
+            {
+                Solid solid = go as Solid;
+                if (solid == null || solid.Faces.IsEmpty) continue;
+
+                Solid cropCopy = SolidUtils.Clone(masterCropSolid);
+                Solid clipped;
+                try
+                {
+                    clipped = BooleanOperationsUtils.ExecuteBooleanOperation(
+                        SolidUtils.Clone(solid), cropCopy, BooleanOperationsType.Intersect);
+                }
+                catch { continue; }
+                if (clipped == null || clipped.Faces.IsEmpty) continue;
+
+                foreach (Face f in clipped.Faces)
+                {
+                    PlanarFace pf = f as PlanarFace;
+                    if (pf == null || Math.Abs(pf.FaceNormal.Z - 1.0) > 1e-3) continue;
+
+                    foreach (EdgeArray loop in pf.EdgeLoops)
+                        foreach (Edge edge in loop)
+                            foreach (XYZ pt in edge.Tessellate())
+                            {
+                                double proj = pt.DotProduct(rightVec);
+                                if (proj < clippedLeft) clippedLeft = proj;
+                                if (proj > clippedRight) clippedRight = proj;
+                                found = true;
+                            }
+                }
+            }
+            return found;
         }
 
         private void CreateDimensionChain(Document doc, View view,
@@ -927,6 +1238,34 @@ namespace DAN_Plugin
                     if (dimType != null) doc.Create.NewDimension(view, l, refs, dimType);
                     else doc.Create.NewDimension(view, l, refs);
                 }
+            }
+            else
+            {
+                // Сдвигаем текст вниз и вправо для сегментов «верх стены → низ следующей стены»
+                double gapOffsetDown  = UnitUtils.ConvertToInternalUnits(400, UnitTypeId.Millimeters);
+                double gapOffsetRight = UnitUtils.ConvertToInternalUnits(300, UnitTypeId.Millimeters);
+
+                try
+                {
+                    int si = 0;
+                    foreach (DimensionSegment seg in dim.Segments)
+                    {
+                        if (si < sortedFaces.Count - 1)
+                        {
+                            FaceData fA = sortedFaces[si];
+                            FaceData fB = sortedFaces[si + 1];
+                            if (fA.IsWall && fA.IsTop && fB.IsWall && !fB.IsTop)
+                            {
+                                double midZ = (fA.Z + fB.Z) / 2.0;
+                                seg.TextPosition = rightVec.Multiply(rightProj + gapOffsetRight)
+                                                 + viewDir.Multiply(depth)
+                                                 + XYZ.BasisZ.Multiply(midZ - gapOffsetDown);
+                            }
+                        }
+                        si++;
+                    }
+                }
+                catch { }
             }
         }
 
@@ -1197,7 +1536,7 @@ namespace DAN_Plugin
         /// вставки. Работает для прямоугольных проёмов, выровненных по стене.
         /// </summary>
         private int CreateOpeningDimensions(Document doc, ViewSection section, Wall wall,
-            XYZ rightVec, XYZ viewDir)
+            XYZ rightVec, XYZ viewDir, List<(double bottom, double top)> hiddenZones)
         {
             // Проёмы ищем по геометрии стены: вырезы в профиле (внутренние контуры
             // лицевой грани) и, дополнительно, вставки (двери/окна/проёмы-вставки).
@@ -1230,15 +1569,6 @@ namespace DAN_Plugin
 
             if (!openingBoxes.Any()) return 0;
 
-            FamilySymbol openingSymbol = new FilteredElementCollector(doc)
-                .OfClass(typeof(FamilySymbol))
-                .Cast<FamilySymbol>()
-                .FirstOrDefault(fs =>
-                    fs.Family.Name.Equals("Обозначение_Проем", StringComparison.OrdinalIgnoreCase) &&
-                    fs.Name.Equals("По умолчанию", StringComparison.OrdinalIgnoreCase));
-            if (openingSymbol != null && !openingSymbol.IsActive)
-                openingSymbol.Activate();
-
             GetWallFaceRefs(wall, section, rightVec, out var vertFaces, out var horizFaces);
             if (vertFaces.Count < 2 || horizFaces.Count < 2) return openingBoxes.Count;
 
@@ -1255,10 +1585,19 @@ namespace DAN_Plugin
             double depth = section.Origin.DotProduct(viewDir);
             double eps = UnitUtils.ConvertToInternalUnits(75, UnitTypeId.Millimeters);    // допуск сопоставления граней
             double offRight = UnitUtils.ConvertToInternalUnits(300, UnitTypeId.Millimeters); // вынос вертикальной цепочки правее проёма
-            double offTop = UnitUtils.ConvertToInternalUnits(300, UnitTypeId.Millimeters);   // вынос горизонтальной цепочки выше проёма
 
             XYZ MakePt(double proj, double z) =>
                 rightVec.Multiply(proj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
+
+            // Границы crop box вида — проёмы, выходящие за них, не образмериваем
+            BoundingBoxXYZ cropBox = section.CropBox;
+            Transform ct = cropBox.Transform;
+            double cropLeftEdge = Math.Min(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
+                                            ct.OfPoint(cropBox.Max).DotProduct(rightVec));
+            double cropRightEdge = Math.Max(ct.OfPoint(cropBox.Min).DotProduct(rightVec),
+                                             ct.OfPoint(cropBox.Max).DotProduct(rightVec));
+            double cropBottomZ = Math.Min(ct.OfPoint(cropBox.Min).Z, ct.OfPoint(cropBox.Max).Z);
+            double cropTopZ = Math.Max(ct.OfPoint(cropBox.Min).Z, ct.OfPoint(cropBox.Max).Z);
 
             Reference NearestVert(double proj) => vertFaces
                 .Where(v => Math.Abs(v.proj - proj) < eps)
@@ -1284,6 +1623,16 @@ namespace DAN_Plugin
             {
                 double oMinProj = ob.minProj, oMaxProj = ob.maxProj;
                 double oBottomZ = ob.botZ, oTopZ = ob.topZ;
+
+                // Проём, выходящий за crop box вида, не образмериваем
+                if (oMinProj < cropLeftEdge || oMaxProj > cropRightEdge ||
+                    oBottomZ < cropBottomZ || oTopZ > cropTopZ)
+                    continue;
+
+                // Проём, попавший в скрытую зону разрыва вида, не образмериваем —
+                // та же проверка, что и для высотных отметок/плит.
+                if (hiddenZones.Any(z => oTopZ > z.bottom && oTopZ < z.top)) continue;
+                if (hiddenZones.Any(z => oBottomZ > z.bottom && oBottomZ < z.top)) continue;
 
                 Reference openLeft = NearestVert(oMinProj);
                 Reference openRight = NearestVert(oMaxProj);
@@ -1358,7 +1707,7 @@ namespace DAN_Plugin
 
                     if (wDed.Count >= 2)
                     {
-                        double hZ = oTopZ + offTop;
+                        double hZ = (oBottomZ + oTopZ) / 2.0;
                         try
                         {
                             Line hline = Line.CreateBound(
@@ -1370,22 +1719,6 @@ namespace DAN_Plugin
                         }
                         catch (Exception ex) { TaskDialog.Show("Предупреждение (ширина проёма)", ex.Message); }
                     }
-                }
-
-                // Вставляем "Обозначение_Проем" в центр проёма
-                if (openingSymbol != null)
-                {
-                    XYZ insertPt = MakePt(oMinProj, oTopZ);
-                    try
-                    {
-                        FamilyInstance fi = doc.Create.NewFamilyInstance(insertPt, openingSymbol, section);
-                        if (fi != null)
-                        {
-                            fi.LookupParameter("Длина") ?.Set(oMaxProj - oMinProj);
-                            fi.LookupParameter("Ширина")?.Set(oTopZ    - oBottomZ);
-                        }
-                    }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (Обозначение_Проем)", ex.Message); }
                 }
             }
 
@@ -1483,8 +1816,40 @@ namespace DAN_Plugin
             XYZ viewBasisZ = XYZ.BasisZ.Negate();                          // -Z
             XYZ upDir = viewBasisZ.CrossProduct(rightDir).Normalize();      // поперёк толщины
 
-            // Origin — середина стены на отметке cutZ (между отметками 1 и 2)
-            XYZ origin = new XYZ(wallMid.X, wallMid.Y, cutZ);
+            // Полный горизонтальный охват сборки вдоль rightDir:
+            // если сборка включает несколько стен (боковые + центральные), разрез
+            // должен охватывать всю сборку, а не только текущую стену.
+            double asmMinR = double.MaxValue, asmMaxR = double.MinValue;
+            foreach (var memberId in assembly.GetMemberIds())
+            {
+                // Только стены — плиты/фундаменты в составе сборки могут быть
+                // огромными (вплоть до целого здания), и их bounding box не должен
+                // влиять на охват разреза по горизонтали.
+                if (!(doc.GetElement(memberId) is Wall)) continue;
+
+                BoundingBoxXYZ ebb = doc.GetElement(memberId)?.get_BoundingBox(null);
+                if (ebb == null) continue;
+                foreach (XYZ corner in new[] {
+                    ebb.Min,
+                    new XYZ(ebb.Max.X, ebb.Min.Y, ebb.Min.Z),
+                    new XYZ(ebb.Min.X, ebb.Max.Y, ebb.Min.Z),
+                    new XYZ(ebb.Max.X, ebb.Max.Y, ebb.Min.Z) })
+                {
+                    double r = corner.DotProduct(rightDir);
+                    if (r < asmMinR) asmMinR = r;
+                    if (r > asmMaxR) asmMaxR = r;
+                }
+            }
+            double asmLength   = (asmMaxR > asmMinR) ? (asmMaxR - asmMinR) : wallLength;
+            double asmCenterR  = (asmMaxR > asmMinR) ? (asmMinR + asmMaxR) / 2.0 : wallMid.DotProduct(rightDir);
+
+            // Origin — центр сборки по горизонтали, на отметке cutZ
+            double wallMidR = wallMid.DotProduct(rightDir);
+            double shiftR = asmCenterR - wallMidR;
+            XYZ origin = new XYZ(
+                wallMid.X + rightDir.X * shiftR,
+                wallMid.Y + rightDir.Y * shiftR,
+                cutZ);
 
             Transform t = Transform.Identity;
             t.BasisX = rightDir;     // вдоль длины
@@ -1497,13 +1862,13 @@ namespace DAN_Plugin
             BoundingBoxXYZ sectionBox = new BoundingBoxXYZ();
             sectionBox.Transform = t;
             sectionBox.Min = new XYZ(
-                -wallLength / 2.0 - offsetLen,      // X — левая граница (подрезка и левая марка)
+                -asmLength / 2.0 - offsetLen,       // X — левая граница (вся сборка + марки)
                 -wallThickness / 2.0 - offsetThk,   // Y — толщина стены
-                -depthUp);                          // Z — небольшой запас выше секущей
+                -depthUp);                           // Z — небольшой запас выше секущей
             sectionBox.Max = new XYZ(
-                 wallLength / 2.0 + offsetLen,      // X — правая граница (подрезка и правая марка)
+                 asmLength / 2.0 + offsetLen,        // X — правая граница (вся сборка + марки)
                  wallThickness / 2.0 + offsetThk,
-                 depthDown);                        // Z — глубина взгляда вниз
+                 depthDown);                         // Z — глубина взгляда вниз
 
             // Тип вида — "Вид узла" (Detail) с именем "*04_Стены_сечение"
             ViewFamilyType detailType = new FilteredElementCollector(doc)
@@ -1547,34 +1912,26 @@ namespace DAN_Plugin
             return newSection;
         }
 
-        private void CreateReferenceWallSection(Document doc, Wall wall, double cutZ,
+        private void CreateReferenceWallSection(Document doc, double cutZ,
             XYZ viewRight, ViewSection parentSection, ViewSection referencedView)
         {
-            if (wall == null || referencedView == null) return;
+            if (referencedView == null) return;
 
-            LocationCurve locationCurve = wall.Location as LocationCurve;
-            if (locationCurve == null) return;
-            Line wallLine = locationCurve.Curve as Line;
-            if (wallLine == null) return;
+            // Левый/правый край марки берём из CropBox обычного разреза, на который
+            // ссылаемся — а не из длины одной стены, чтобы координаты X/Y ссылочного
+            // разреза в точности совпадали с обычным.
+            BoundingBoxXYZ cropBox = referencedView.CropBox;
+            Transform t = cropBox.Transform;
+            XYZ pMin = t.OfPoint(new XYZ(cropBox.Min.X, 0, 0));
+            XYZ pMax = t.OfPoint(new XYZ(cropBox.Max.X, 0, 0));
 
-            XYZ wallStart = wallLine.GetEndPoint(0);
-            XYZ wallEnd   = wallLine.GetEndPoint(1);
-            XYZ wallMid   = (wallStart + wallEnd) / 2.0;
-            double wallLength = wallLine.Length;
+            double projMin = pMin.DotProduct(viewRight);
+            double projMax = pMax.DotProduct(viewRight);
+            XYZ leftPt  = projMin <= projMax ? pMin : pMax;
+            XYZ rightPt = projMin <= projMax ? pMax : pMin;
 
-            // Та же коррекция направления что и в CreateWallSection:
-            // если wallDir указывает «влево» относительно viewRight — негируем
-            XYZ wallDir = wallLine.Direction.Normalize();
-            XYZ viewRightHoriz = new XYZ(viewRight.X, viewRight.Y, 0);
-            if (viewRightHoriz.GetLength() > 1e-9 &&
-                wallDir.DotProduct(viewRightHoriz.Normalize()) < 0)
-                wallDir = wallDir.Negate();
-
-            // Точки симметрично от wallMid с тем же отступом что и у основного разреза
-            double markerOffset = UnitUtils.ConvertToInternalUnits(800, UnitTypeId.Millimeters);
-            XYZ origin    = new XYZ(wallMid.X, wallMid.Y, cutZ);
-            XYZ headPoint = origin - wallDir.Multiply(wallLength / 2.0 + markerOffset);
-            XYZ tailPoint = origin + wallDir.Multiply(wallLength / 2.0 + markerOffset);
+            XYZ headPoint = new XYZ(leftPt.X,  leftPt.Y,  cutZ);
+            XYZ tailPoint = new XYZ(rightPt.X, rightPt.Y, cutZ);
 
             // tailPoint передаётся первым (head), headPoint — вторым (tail):
             // вектор tail→head даёт -Z через cross product с ViewDirection родителя → разрез смотрит вниз
@@ -1589,7 +1946,7 @@ namespace DAN_Plugin
         ///   4 — толщина с привязкой к продольной оси.
         /// </summary>
         private void CreateWallSectionDimensions(Document doc, ViewSection sectionView,
-            Wall wall, XYZ viewRight)
+            Wall wall, IList<Wall> floorWalls, XYZ viewRight)
         {
             if (sectionView == null || wall == null) return;
 
@@ -1605,18 +1962,21 @@ namespace DAN_Plugin
 
             double cutZ = sectionView.Origin.Z;
 
-            // Пробуем получить геометрию с контекстом разреза (тогда проёмы будут вырезаны),
-            // fallback — без контекста вида.
-            GeometryElement geom =
-                wall.get_Geometry(new Options { ComputeReferences = true, IncludeNonVisibleObjects = false, View = sectionView })
-                ?? wall.get_Geometry(new Options { ComputeReferences = true, IncludeNonVisibleObjects = false });
-
-            // allEndFaces — ВСЕ грани с нормалью ± wallDir (торцы стены + откосы проёмов)
+            // allEndFaces — торцы и откосы проёмов со ВСЕХ стен этажа
             var allEndFaces = new List<(double proj, Reference r)>();
             var sideFaces   = new List<(double proj, Reference r)>();
 
-            if (geom != null)
+            double eps2 = UnitUtils.ConvertToInternalUnits(5, UnitTypeId.Millimeters);
+
+            var repGeomV = wall.get_Geometry(new Options { ComputeReferences = true, View = sectionView });
+            var repGeomN = wall.get_Geometry(new Options { ComputeReferences = true });
+            GeometryElement repGeomForSide = repGeomV ?? repGeomN;
+
+            foreach (Wall w in floorWalls)
             {
+                GeometryElement geom = w.get_Geometry(new Options { ComputeReferences = true });
+                if (geom == null) continue;
+
                 foreach (GeometryObject go in geom)
                 {
                     Solid s = go as Solid;
@@ -1627,11 +1987,36 @@ namespace DAN_Plugin
                         if (pf == null || pf.Reference == null) continue;
                         XYZ n = pf.FaceNormal.Normalize();
                         if (Math.Abs(n.Z) > 1e-3) continue;
+                        double dotWall = pf.FaceNormal.DotProduct(wallDir);
+                        double proj = pf.Origin.DotProduct(wallDir);
+                        if (Math.Abs(Math.Abs(dotWall) - 1.0) < 1e-3)
+                        {
+                            if (!allEndFaces.Any(e => Math.Abs(e.proj - proj) < eps2))
+                                allEndFaces.Add((proj, pf.Reference));
+                        }
+                    }
+                }
+            }
 
-                        if (Math.Abs(Math.Abs(n.DotProduct(wallDir)) - 1.0) < 1e-3)
-                            allEndFaces.Add((pf.Origin.DotProduct(wallDir), pf.Reference));
-                        else if (Math.Abs(Math.Abs(n.DotProduct(upDir)) - 1.0) < 1e-3)
-                            sideFaces.Add((pf.Origin.DotProduct(upDir), pf.Reference));
+            // sideFaces — только от репрезентативной стены
+            if (repGeomForSide != null)
+            {
+                foreach (GeometryObject go in repGeomForSide)
+                {
+                    Solid s = go as Solid;
+                    if (s == null || s.Faces.IsEmpty) continue;
+                    foreach (Face f in s.Faces)
+                    {
+                        PlanarFace pf = f as PlanarFace;
+                        if (pf == null || pf.Reference == null) continue;
+                        XYZ n = pf.FaceNormal.Normalize();
+                        if (Math.Abs(n.Z) > 1e-3) continue;
+                        if (Math.Abs(Math.Abs(n.DotProduct(upDir)) - 1.0) < 1e-3)
+                        {
+                            double up = pf.Origin.DotProduct(upDir);
+                            if (!sideFaces.Any(e => Math.Abs(e.proj - up) < eps2))
+                                sideFaces.Add((up, pf.Reference));
+                        }
                     }
                 }
             }
@@ -1647,6 +2032,33 @@ namespace DAN_Plugin
             double maxU = sideFaces.Max(f => f.proj);
             Reference minURef = sideFaces.OrderBy(f => f.proj).First().r;
             Reference maxURef = sideFaces.OrderByDescending(f => f.proj).First().r;
+
+            // Расширяем crop box вида так, чтобы все торцевые грани были видимы
+            try
+            {
+                BoundingBoxXYZ cropBox = sectionView.CropBox;
+                Transform ct = cropBox.Transform;
+
+                // ВАЖНО: реальный ct.BasisX не гарантированно совпадает по знаку с
+                // wallDir (Revit может пересобрать оси при ViewSection.CreateDetail).
+                // Поэтому локальную координату торца стены считаем через проекцию на
+                // wallDir с учётом знака BasisX относительно wallDir, а не напрямую.
+                double sign = ct.BasisX.DotProduct(wallDir) >= 0 ? 1.0 : -1.0;
+                double originWallProj = ct.Origin.DotProduct(wallDir);
+                double a = (leftProj  - originWallProj) * sign;
+                double b = (rightProj - originWallProj) * sign;
+                double localLeft  = Math.Min(a, b);
+                double localRight = Math.Max(a, b);
+                double cbPad = UnitUtils.ConvertToInternalUnits(300, UnitTypeId.Millimeters);
+                bool willExpand = (localLeft - cbPad) < cropBox.Min.X || (localRight + cbPad) > cropBox.Max.X;
+                if (willExpand)
+                {
+                    cropBox.Min = new XYZ(Math.Min(cropBox.Min.X, localLeft  - cbPad), cropBox.Min.Y, cropBox.Min.Z);
+                    cropBox.Max = new XYZ(Math.Max(cropBox.Max.X, localRight + cbPad), cropBox.Max.Y, cropBox.Max.Z);
+                    sectionView.CropBox = cropBox;
+                }
+            }
+            catch { }
 
             DimensionType dimType = new FilteredElementCollector(doc)
                 .OfClass(typeof(DimensionType)).Cast<DimensionType>()

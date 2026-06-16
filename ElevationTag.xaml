@@ -220,7 +220,7 @@
         <CheckBox x:Name="ChkCreateBreak"
                   Style="{StaticResource ModernCheckBox}"
                   Content="Создать разрыв вида"
-                  IsChecked="True"
+                  IsChecked="False"
                   Margin="0 8 0 0"
                   Checked="ChkCreateBreak_Changed"
                   Unchecked="ChkCreateBreak_Changed"/>

@@ -54,6 +54,9 @@ namespace DAN_Plugin
             _rows.Add(new BreakRangeRow { Bottom = "30000", Top = "50000" });
             RangesItems.ItemsSource = _rows;
 
+            // Поля координат разрыва изначально недоступны, если галочка не отмечена
+            PnlBreak.IsEnabled = ChkCreateBreak.IsChecked == true;
+
             Validate();
         }
 
