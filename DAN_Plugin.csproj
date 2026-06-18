@@ -8,7 +8,7 @@
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Пробник</RootNamespace>
-    <AssemblyName>Пробник</AssemblyName>
+    <AssemblyName>DAN_Plugin</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
@@ -56,9 +56,9 @@
       <HintPath>..\..\..\Desktop\C#\C#\Тесты\Пробник\bin\Debug\VCRevitRibbonUtil.dll</HintPath>
     </Reference>
     <Reference Include="WindowsBase" />
-    <Reference Include="Пробник, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="DAN_Plugin, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>bin\Debug\Пробник.dll</HintPath>
+      <HintPath>bin\Debug\DAN_Plugin.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>

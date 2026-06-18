@@ -31,13 +31,13 @@ namespace DAN_Plugin
         }
 
         private const double ZTolerance = 1.0 / 304.8;
-        private double hiddenZoneBottom = double.MinValue;
-        private double hiddenZoneTop = double.MaxValue;
         private double globalMinRight = double.MaxValue;
         private double globalMaxRight = double.MinValue;
+        private readonly List<string> _warnings = new List<string>();
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            _warnings.Clear();
             UIDocument uiDoc = commandData.Application.ActiveUIDocument;
             Document doc = uiDoc.Document;
             ViewSection section = doc.ActiveView as ViewSection;
@@ -251,8 +251,8 @@ namespace DAN_Plugin
                 .FirstOrDefault(t => t.StyleType == DimensionStyleType.SpotElevation &&
                     t.Name.Equals("BI_стрелка_проектная_вниз", StringComparison.OrdinalIgnoreCase));
 
-            if (spotTypeUp == null) TaskDialog.Show("Предупреждение", "Тип \"BI_стрелка_проектная_вверх\" не найден.");
-            if (spotTypeDown == null) TaskDialog.Show("Предупреждение", "Тип \"BI_стрелка_проектная_вниз\" не найден.");
+            if (spotTypeUp == null) _warnings.Add("Тип \"BI_стрелка_проектная_вверх\" не найден.");
+            if (spotTypeDown == null) _warnings.Add("Тип \"BI_стрелка_проектная_вниз\" не найден.");
 
             // Шаг 4: сбор элементов
             var visibleIds = new FilteredElementCollector(doc, section.Id)
@@ -296,8 +296,6 @@ namespace DAN_Plugin
             double ProjDepth(XYZ pt) => pt.DotProduct(viewDir);
 
             // Вычисляем все скрытые зоны из mgr
-            hiddenZoneBottom = double.MinValue;
-            hiddenZoneTop = double.MaxValue;
             var hiddenZones = new List<(double bottom, double top)>();
 
             var mgrCheck = section.GetCropRegionShapeManager();
@@ -317,11 +315,6 @@ namespace DAN_Plugin
                     hiddenZones.Add((wBottomZ + localBottom * wHeight, wBottomZ + localTop * wHeight));
                 }
 
-                if (hiddenZones.Any())
-                {
-                    hiddenZoneBottom = hiddenZones.Min(z => z.bottom);
-                    hiddenZoneTop = hiddenZones.Max(z => z.top);
-                }
             }
 
             // Шаг 5: сбор граней с фильтрацией по скрытой зоне
@@ -383,9 +376,82 @@ namespace DAN_Plugin
             XYZ MakePoint(double rightProj, double depth, double z) =>
                 rightVec.Multiply(rightProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
 
+            // Семейство GenericAnnotation «Высотная отметка» для замены SpotDimension перед разрывом
+            FamilySymbol annotSymbol = hiddenZones.Any()
+                ? new FilteredElementCollector(doc)
+                    .OfClass(typeof(FamilySymbol))
+                    .OfCategory(BuiltInCategory.OST_GenericAnnotation)
+                    .Cast<FamilySymbol>()
+                    .FirstOrDefault(fs => fs.Name.Equals(
+                        "Высотная отметка", StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (annotSymbol == null && hiddenZones.Any())
+                _warnings.Add("Семейство аннотации \"Высотная отметка\" не найдено.");
+
+            // Для каждой скрытой зоны: последняя видимая грань снизу → заменяется аннотацией.
+            // Шаг и количество берём из oddFaces — те же данные, что и у префикса размера.
+            // levelZ — raw Z нечётной грани (низ плиты / верх стены) перед разрывом.
+            // Это и есть проектная высота уровня, которую нужно записать в "отм.1".
+            var annotFaceData = new Dictionary<double, (double step, int count, int elevMm, double levelZ)>();
+            foreach (var hz in hiddenZones)
+            {
+                if (annotSymbol == null) break;
+
+                // Z для размещения аннотации — последняя грань allFaces перед разрывом
+                int lastAllIdx = -1;
+                for (int k = allFaces.Count - 1; k >= 0; k--)
+                    if (allFaces[k].Z < hz.bottom) { lastAllIdx = k; break; }
+                if (lastAllIdx < 0) continue;
+                double lastZ = allFaces[lastAllIdx].Z;
+
+                // Шаг и количество — по oddFaces (интервал = высота типового этажа)
+                int lastOddIdx = -1;
+                for (int k = oddFaces.Count - 1; k >= 0; k--)
+                    if (oddFaces[k].Z < hz.bottom) { lastOddIdx = k; break; }
+                int firstOddIdx = -1;
+                for (int k = 0; k < oddFaces.Count; k++)
+                    if (oddFaces[k].Z > hz.top) { firstOddIdx = k; break; }
+                if (lastOddIdx < 0 || firstOddIdx < 0) continue;
+
+                double step = lastOddIdx > 0
+                    ? oddFaces[lastOddIdx].Z - oddFaces[lastOddIdx - 1].Z
+                    : firstOddIdx + 1 < oddFaces.Count
+                        ? oddFaces[firstOddIdx + 1].Z - oddFaces[firstOddIdx].Z
+                        : 0;
+                double span = oddFaces[firstOddIdx].Z - oddFaces[lastOddIdx].Z;
+                double tol  = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
+                int count   = step > 1e-6 ? (int)Math.Round(span / step) : 0;
+                if (count > 0 && Math.Abs(count * step - span) < tol)
+                {
+                    // levelZ = проектная высота грани аннотации.
+                    // SpotDimension для этой грани показывает lastZ*304.8 - 900 мм,
+                    // где 900 мм — смещение базовой точки проекта относительно начала
+                    // внутренних координат. Вычитаем это смещение из raw Z.
+                    double slabOffset = UnitUtils.ConvertToInternalUnits(900.0, UnitTypeId.Millimeters);
+                    double levelZ = lastZ - slabOffset;
+                    int elevMm = (int)Math.Round(
+                        UnitUtils.ConvertFromInternalUnits(levelZ, UnitTypeId.Millimeters));
+                    annotFaceData[Math.Round(lastZ, 6)] = (step, count, elevMm, levelZ);
+                }
+            }
+
+            // Устанавливает параметр аннотации, обрабатывая разные типы хранения
+            void SetAnnotParam(FamilyInstance inst, string name, double internalVal, int mmVal)
+            {
+                var p = inst.LookupParameter(name);
+                if (p == null || p.IsReadOnly) return;
+                switch (p.StorageType)
+                {
+                    case StorageType.Double:  p.Set(internalVal); break;
+                    case StorageType.Integer: p.Set(mmVal); break;
+                    case StorageType.String:  p.Set(mmVal.ToString()); break;
+                }
+            }
+
             int createdCount = 0;
             int skippedCount = 0;
             int openingsFound = 0;
+
 
             using (Transaction tx = new Transaction(doc, "Создать высотные отметки и размеры"))
             {
@@ -394,20 +460,95 @@ namespace DAN_Plugin
                 // Удаляем высотные отметки, попавшие в зоны разрыва после его создания
                 if (hiddenZones.Count > 0)
                 {
-                    var inHiddenZoneIds = new FilteredElementCollector(doc, section.Id)
+                    var inHiddenZoneSDs = new FilteredElementCollector(doc, section.Id)
                         .OfClass(typeof(SpotDimension))
                         .Cast<SpotDimension>()
-                        .Where(sd =>
-                            (sd.SpotDimensionType.Name.Equals("BI_стрелка_проектная_вверх", StringComparison.OrdinalIgnoreCase) ||
-                             sd.SpotDimensionType.Name.Equals("BI_стрелка_проектная_вниз", StringComparison.OrdinalIgnoreCase)) &&
-                            hiddenZones.Any(hz => sd.Origin.Z > hz.bottom && sd.Origin.Z < hz.top))
-                        .Select(sd => sd.Id)
+                        .Where(sd => hiddenZones.Any(hz => sd.Origin.Z > hz.bottom && sd.Origin.Z < hz.top))
                         .ToList();
-                    foreach (var id in inHiddenZoneIds)
-                        try { doc.Delete(id); } catch { }
+
+                    foreach (var sd in inHiddenZoneSDs)
+                        try { doc.Delete(sd.Id); } catch { }
 
                     // Синхронизируем existingZs — убираем удалённые отметки
                     existingZs.RemoveWhere(z => hiddenZones.Any(hz => z > hz.bottom && z < hz.top));
+                }
+
+                // Дедубликация: удаляем все ранее созданные аннотации «Высотная отметка» в виде
+                if (annotSymbol != null)
+                {
+                    var existingAnnots = new FilteredElementCollector(doc, section.Id)
+                        .OfClass(typeof(FamilyInstance))
+                        .Cast<FamilyInstance>()
+                        .Where(fi => fi.Symbol.Id == annotSymbol.Id)
+                        .ToList();
+                    foreach (var fi in existingAnnots)
+                        try { doc.Delete(fi.Id); } catch { }
+                }
+
+                // Дедубликация: удаляем SpotDimension на гранях аннотаций (перед разрывом),
+                // чтобы при повторном вызове без recreate там не было уже существующей отметки
+                if (annotFaceData.Count > 0)
+                {
+                    var annotFaceSDs = new FilteredElementCollector(doc, section.Id)
+                        .OfClass(typeof(SpotDimension))
+                        .Cast<SpotDimension>()
+                        .Where(sd => annotFaceData.ContainsKey(Math.Round(sd.Origin.Z, 6)))
+                        .ToList();
+                    foreach (var sd in annotFaceSDs)
+                    {
+                        existingZs.Remove(Math.Round(sd.Origin.Z, 6));
+                        try { doc.Delete(sd.Id); } catch { }
+                    }
+                }
+
+                // Дедубликация линий разрыва — удаляем все существующие перед пересозданием
+                {
+                    var existingBreakLines = new FilteredElementCollector(doc, section.Id)
+                        .OfClass(typeof(FamilyInstance))
+                        .Cast<FamilyInstance>()
+                        .Where(fi => fi.Symbol.Family.Name.Equals(
+                            "(Оформление) Линия разрыва", StringComparison.OrdinalIgnoreCase))
+                        .Select(fi => fi.Id)
+                        .ToList();
+                    foreach (var id in existingBreakLines)
+                        try { doc.Delete(id); } catch { }
+                }
+
+                // Удаляем ссылочные разрезы, попавшие в зону разрыва.
+                // Маркеры разрезов (OST_Sections) видны в виде через collector по виду.
+                // hiddenZones — мировые координаты; маркеры могут хранить Z в проектных →
+                // конвертируем через смещение базовой точки проекта.
+                if (hiddenZones.Count > 0)
+                {
+                    var refMarkersToDelete = new FilteredElementCollector(doc, section.Id)
+                        .OfCategory(BuiltInCategory.OST_Sections)
+                        .WhereElementIsNotElementType()
+                        .ToList()
+                        .Where(e =>
+                        {
+                            BoundingBoxXYZ bb = e.get_BoundingBox(null);
+                            if (bb == null) return false;
+                            double midZ = (bb.Min.Z + bb.Max.Z) / 2.0;
+                            return hiddenZones.Any(hz => midZ > hz.bottom && midZ < hz.top);
+                        })
+                        .Select(e => e.Id)
+                        .ToList();
+
+                    foreach (var id in refMarkersToDelete)
+                        try { doc.Delete(id); } catch { }
+                }
+
+                // Смещение между raw Z (внутренние единицы, футы) и проектной высотой.
+                // SpotDimension.Value — проектная высота в футах; Origin.Z — raw Z в футах.
+                // Берём из любого существующего SpotDimension в виде, без фильтра по типу.
+                double? elevOffset = null;
+                {
+                    var anySD = new FilteredElementCollector(doc, section.Id)
+                        .OfClass(typeof(SpotDimension))
+                        .Cast<SpotDimension>()
+                        .FirstOrDefault();
+                    if (anySD != null)
+                        elevOffset = anySD.Value - anySD.Origin.Z;
                 }
 
                 for (int i = 0; i < allFaces.Count; i++)
@@ -425,32 +566,93 @@ namespace DAN_Plugin
                         // Плиты: всегда стрелка вверх
                         typeToUse = spotTypeUp ?? spotTypeDown;
 
-                    try
+                    double faceRndZ = Math.Round(fd.Z, 6);
+                    if (annotFaceData.TryGetValue(faceRndZ, out var aInfo))
                     {
-                        double z = fd.Z;
-                        double depth = ProjDepth(fd.FacePoint);
-
-                        double originProj = fd.IsWall
-                            ? fd.FacePoint.DotProduct(rightVec)
-                            : Math.Max(globalMinRight, fd.LeftProj);
-
-                        XYZ origin = MakePoint(originProj, depth, z);
-                        XYZ bend = MakePoint(tagProj - bendGap, depth, z);
-                        XYZ end = MakePoint(tagProj - bendGap * 2, depth, z);
-
-                        SpotDimension spotDim = doc.Create.NewSpotElevation(
-                            section, fd.FaceRef, origin, bend, end, origin, true);
-
-                        if (spotDim != null)
+                        // Грань перед разрывом → GenericAnnotation вместо SpotDimension
+                        try
                         {
-                            if (typeToUse != null) spotDim.ChangeTypeId(typeToUse.Id);
-                            createdCount++;
-                            existingZs.Add(Math.Round(z, 6));
+                            if (!annotSymbol.IsActive) annotSymbol.Activate();
+                            double annotUpOffset = UnitUtils.ConvertToInternalUnits(
+                                55.0 * section.Scale, UnitTypeId.Millimeters);
+                            XYZ annotPt = MakePoint(tagProj - bendGap * 2, ProjDepth(fd.FacePoint), fd.Z + annotUpOffset);
+                            FamilyInstance inst = doc.Create.NewFamilyInstance(annotPt, annotSymbol, section);
+                            if (inst != null)
+                            {
+                                int stepMm = (int)Math.Round(
+                                    UnitUtils.ConvertFromInternalUnits(aInfo.step, UnitTypeId.Millimeters));
+                                SetAnnotParam(inst, "Высота этажа", aInfo.step, stepMm);
+                                SetAnnotParam(inst, "отм.1", aInfo.levelZ, aInfo.elevMm);
+                                SetAnnotParam(inst, "Количество строк", Math.Min(aInfo.count, 4), Math.Min(aInfo.count, 4));
+                                SetAnnotParam(inst, "стрелка_снизу", 0, 1);
+                                SetAnnotParam(inst, "стрелка_сверху", 0, 0);
+                                createdCount++;
+                                existingZs.Add(faceRndZ);
+
+                                {
+                                    double leftShift = UnitUtils.ConvertToInternalUnits(
+                                        section.Scale * 13.0, UnitTypeId.Millimeters);
+                                    int remaining = aInfo.count - 4;
+                                    double curElev = aInfo.levelZ + 4 * aInfo.step;
+                                    int shiftIdx = 1;
+                                    while (remaining > 0)
+                                    {
+                                        int curCount = Math.Min(remaining, 4);
+                                        int curElevMm = (int)Math.Round(
+                                            UnitUtils.ConvertFromInternalUnits(curElev, UnitTypeId.Millimeters));
+                                        XYZ annotPtN = MakePoint(
+                                            tagProj - bendGap * 2 - shiftIdx * leftShift,
+                                            ProjDepth(fd.FacePoint),
+                                            fd.Z + annotUpOffset);
+                                        FamilyInstance instN = doc.Create.NewFamilyInstance(annotPtN, annotSymbol, section);
+                                        if (instN != null)
+                                        {
+                                            SetAnnotParam(instN, "Высота этажа", aInfo.step, stepMm);
+                                            SetAnnotParam(instN, "отм.1", curElev, curElevMm);
+                                            SetAnnotParam(instN, "Количество строк", curCount, curCount);
+                                            SetAnnotParam(instN, "стрелка_снизу", 0, 0);
+                                            SetAnnotParam(instN, "стрелка_сверху", 0, 0);
+                                        }
+                                        remaining -= 4;
+                                        curElev += 4 * aInfo.step;
+                                        shiftIdx++;
+                                    }
+                                }
+
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _warnings.Add($"Аннотация перед разрывом, Id={fd.Elem.Id}: {ex.Message}");
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        TaskDialog.Show("Предупреждение", $"Элемент Id={fd.Elem.Id}: {ex.Message}");
+                        try
+                        {
+                            double z = fd.Z;
+                            double originProj = Math.Max(fd.LeftProj, globalMinRight);
+                            double depth = ProjDepth(fd.FacePoint);
+
+                            XYZ origin = MakePoint(originProj, depth, z);
+                            XYZ bend   = MakePoint(tagProj - bendGap,     depth, z);
+                            XYZ end    = MakePoint(tagProj - bendGap * 2, depth, z);
+
+                            SpotDimension spotDim = doc.Create.NewSpotElevation(
+                                section, fd.FaceRef, origin, bend, end, end, true);
+
+                            if (spotDim != null)
+                            {
+                                if (typeToUse != null) spotDim.ChangeTypeId(typeToUse.Id);
+                                if (elevOffset == null) elevOffset = spotDim.Value - z;
+                                createdCount++;
+                                existingZs.Add(Math.Round(z, 6));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _warnings.Add($"Высотная отметка, элемент Id={fd.Elem.Id}: {ex.Message}");
+                        }
                     }
                 }
 
@@ -461,30 +663,47 @@ namespace DAN_Plugin
                     .Select(d => d.Id).ToList())
                     try { doc.Delete(dId); } catch { }
 
-                if (allFaces.Count >= 2)
-                    try { CreateDimensionChain(doc, section, allFaces, dimProj, refDepth, rightVec, viewDir); }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (размеры)", ex.Message); }
+                // Разбивает список граней на сегменты по скрытым зонам разрыва
+                List<List<FaceData>> SplitByBreaks(List<FaceData> faces)
+                {
+                    var segs = new List<List<FaceData>>();
+                    if (faces.Count == 0) return segs;
+                    var grp = new List<FaceData> { faces[0] };
+                    for (int si = 1; si < faces.Count; si++)
+                    {
+                        if (hiddenZones.Any(hz => faces[si - 1].Z < hz.bottom && faces[si].Z > hz.top))
+                        { segs.Add(grp); grp = new List<FaceData>(); }
+                        grp.Add(faces[si]);
+                    }
+                    segs.Add(grp);
+                    return segs;
+                }
 
+                // Цепочка всех граней — разбивается по разрывам
+                foreach (var seg in SplitByBreaks(allFaces).Where(s => s.Count >= 2))
+                    try { CreateDimensionChain(doc, section, seg, dimProj, refDepth, rightVec, viewDir); }
+                    catch (Exception ex) { _warnings.Add($"Цепочка размеров: {ex.Message}"); }
+
+                // Нечётная цепочка и общий размер — не разбиваются, идут сквозь разрыв
                 if (oddFaces.Count >= 2)
-                    try { CreateDimensionChain(doc, section, oddFaces, dimOddProj, refDepth, rightVec, viewDir); }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (нечётные)", ex.Message); }
+                    try { CreateDimensionChain(doc, section, oddFaces, dimOddProj, refDepth, rightVec, viewDir, hiddenZones); }
+                    catch (Exception ex) { _warnings.Add($"Нечётные размеры: {ex.Message}"); }
 
-                // Общий размер от самой нижней до самой верхней грани
                 if (allFaces.Count >= 2)
                 {
                     var totalFaces = new List<FaceData> { allFaces.First(), allFaces.Last() };
                     try { CreateDimensionChain(doc, section, totalFaces, dimTotalProj, refDepth, rightVec, viewDir); }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (общий размер)", ex.Message); }
+                    catch (Exception ex) { _warnings.Add($"Общий размер: {ex.Message}"); }
                 }
 
                 // Размещаем линии разрыва для всех скрытых зон
                 if (mgrCheck.Split && mgrCheck.NumberOfSplitRegions >= 2)
                     try { CreateBreakLineAnnotations(doc, section, rightVec, viewDir, hiddenZones); }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (линии разрыва)", ex.Message); }
+                    catch (Exception ex) { _warnings.Add($"Линии разрыва: {ex.Message}"); }
 
                 // Размещаем линии разрыва на плитах только если плита не в скрытой зоне
                 try { CreateFloorBreakLineAnnotations(doc, section, rightVec, viewDir, floors, hiddenZones); }
-                catch (Exception ex) { TaskDialog.Show("Предупреждение (линии плит)", ex.Message); }
+                catch (Exception ex) { _warnings.Add($"Линии разрыва (плиты): {ex.Message}"); }
 
                 // Два горизонтальных размера внизу разреза:
                 //   размер 1 (нижний) — длина стены (торец↔торец);
@@ -500,7 +719,7 @@ namespace DAN_Plugin
                 {
                     double baseZ = allFaces.First().Z;   // самая нижняя грань
                     try { CreateWallPlanDimensions(doc, section, dimWall, rightVec, viewDir, baseZ); }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (размеры низ)", ex.Message); }
+                    catch (Exception ex) { _warnings.Add($"Размеры стены: {ex.Message}"); }
                 }
 
                 // Размеры проёмов: для каждой видимой стены с проёмом — две цепочки
@@ -508,11 +727,12 @@ namespace DAN_Plugin
                 foreach (Wall w in walls.OfType<Wall>())
                 {
                     try { openingsFound += CreateOpeningDimensions(doc, section, w, rightVec, viewDir, hiddenZones); }
-                    catch (Exception ex) { TaskDialog.Show("Предупреждение (проёмы)", ex.Message); }
+                    catch (Exception ex) { _warnings.Add($"Размеры проёмов, стена Id={w.Id}: {ex.Message}"); }
                 }
 
                 tx.Commit();
             }
+
 
             string assemblyComment = assembly
                 .get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() ?? assembly.Name;
@@ -782,13 +1002,12 @@ namespace DAN_Plugin
                                 createdSections[entry.sectionIdx] = vs;
                                 sectionsCreated++;
                                 try { CreateWallSectionDimensions(doc, vs, entry.wall, sectionFloorWalls[entry.sectionIdx], rightVec); }
-                                catch (Exception ex) { TaskDialog.Show("Предупреждение (размеры разреза)", ex.Message); }
+                                catch (Exception ex) { _warnings.Add($"Размеры вида узла: {ex.Message}"); }
                             }
                         }
                         catch (Exception ex)
                         {
-                            TaskDialog.Show("Предупреждение (вид узла)",
-                                $"Стена Id={entry.wall.Id}: {ex.GetType().Name}: {ex.Message}");
+                            _warnings.Add($"Вид узла, стена Id={entry.wall.Id}: {ex.GetType().Name}: {ex.Message}");
                         }
                     }
 
@@ -819,8 +1038,7 @@ namespace DAN_Plugin
                         }
                         catch (Exception ex)
                         {
-                            TaskDialog.Show("Предупреждение (ссылочный разрез)",
-                                $"Стена Id={repWall.Id}: {ex.GetType().Name}: {ex.Message}");
+                            _warnings.Add($"Ссылочный разрез, стена Id={repWall.Id}: {ex.GetType().Name}: {ex.Message}");
                         }
                     }
 
@@ -837,6 +1055,9 @@ namespace DAN_Plugin
                         $"Создано разрезов: {sectionsStr}\n" +
                         $"Образмерено проёмов: {openingsFound}";
             if (createBreak) resultMsg += "\n\n⚠ Подвиньте части разрыва вручную через синие ручки на виде.";
+
+            if (_warnings.Any())
+                TaskDialog.Show("Предупреждения", string.Join("\n\n", _warnings));
 
             TaskDialog.Show("Готово", resultMsg);
             return Result.Succeeded;
@@ -946,7 +1167,7 @@ namespace DAN_Plugin
 
             if (breakLineSymbol == null)
             {
-                TaskDialog.Show("Предупреждение", "Семейство не найдено.");
+                _warnings.Add("Семейство линии разрыва \"(Оформление) Линия разрыва / М 1/20\" не найдено.");
                 return;
             }
 
@@ -995,20 +1216,6 @@ namespace DAN_Plugin
         /// <summary>
         /// Находит индекс региона в который попадает мировая Z-координата.
         /// </summary>
-        private int FindRegionForZ(dynamic mgr, double worldZ, double worldBottomZ, double worldHeight)
-        {
-            int n = mgr.NumberOfSplitRegions;
-            for (int i = 0; i < n; i++)
-            {
-                double localMin = mgr.GetSplitRegionMinimum(i);
-                double localMax = mgr.GetSplitRegionMaximum(i);
-                double zMin = worldBottomZ + localMin * worldHeight;
-                double zMax = worldBottomZ + localMax * worldHeight;
-                if (worldZ >= zMin && worldZ <= zMax) return i;
-            }
-            return -1;
-        }
-
         private void TryAddFace(List<FaceData> list, FaceData fd)
         {
             if (fd == null) return;
@@ -1067,7 +1274,46 @@ namespace DAN_Plugin
                 }
             }
 
-            XYZ Center(PlanarFace f) => f.Evaluate((f.GetBoundingBox().Min + f.GetBoundingBox().Max) / 2.0);
+            XYZ Center(PlanarFace f)
+            {
+                UV uvCenter = (f.GetBoundingBox().Min + f.GetBoundingBox().Max) / 2.0;
+                if (f.IsInside(uvCenter))
+                    return f.Evaluate(uvCenter);
+
+                // UV-центр вне грани (обрезка crop box'ом, проём или сложная форма).
+                // Ищем внешний контур (наибольший размах по rightVec), затем берём
+                // середину самого длинного ребра — для прямоугольной грани это
+                // горизонтальное ребро, чья проекция даёт центр стены, а не её торец.
+                EdgeArray outerLoop = null;
+                double maxSpan = -1;
+                foreach (EdgeArray loop in f.EdgeLoops)
+                {
+                    double mn = double.MaxValue, mx = double.MinValue;
+                    foreach (Edge e in loop)
+                    {
+                        double r = e.AsCurve().GetEndPoint(0).DotProduct(rightVec);
+                        if (r < mn) mn = r;
+                        if (r > mx) mx = r;
+                    }
+                    if (mx - mn > maxSpan) { maxSpan = mx - mn; outerLoop = loop; }
+                }
+                if (outerLoop == null && f.EdgeLoops.Size > 0)
+                    outerLoop = f.EdgeLoops.get_Item(0);
+                if (outerLoop != null)
+                {
+                    Edge longest = null; double maxLen = -1;
+                    foreach (Edge e in outerLoop)
+                    {
+                        double len = e.AsCurve().Length;
+                        if (len > maxLen) { maxLen = len; longest = e; }
+                    }
+                    if (longest != null)
+                        return longest.AsCurve().Evaluate(0.5, true);
+                    foreach (Edge e in outerLoop)
+                        return e.AsCurve().Evaluate(0.5, true);
+                }
+                return f.Origin;
+            }
 
             (double min, double max) ProjRange(PlanarFace f)
             {
@@ -1198,7 +1444,8 @@ namespace DAN_Plugin
 
         private void CreateDimensionChain(Document doc, View view,
             List<FaceData> sortedFaces, double rightProj, double depth,
-            XYZ rightVec, XYZ viewDir)
+            XYZ rightVec, XYZ viewDir,
+            List<(double bottom, double top)> breakZones = null)
         {
             if (sortedFaces.Count < 2) return;
 
@@ -1207,7 +1454,7 @@ namespace DAN_Plugin
                 .FirstOrDefault(dt => dt.Name.Equals("BI_основной_2,5мм", StringComparison.OrdinalIgnoreCase));
 
             if (dimType == null)
-                TaskDialog.Show("Предупреждение", "Тип \"BI_основной_2,5мм\" не найден.");
+                _warnings.Add("Тип размера \"BI_основной_2,5мм\" не найден — размеры созданы типом по умолчанию.");
 
             double pad = UnitUtils.ConvertToInternalUnits(0.1, UnitTypeId.Meters);
 
@@ -1266,6 +1513,47 @@ namespace DAN_Plugin
                     }
                 }
                 catch { }
+
+                // Префикс «шаг×кол=» для сегментов, пересекающих зону разрыва
+                if (breakZones != null && breakZones.Any())
+                {
+                    try
+                    {
+                        int sIdx = 0;
+                        foreach (DimensionSegment seg in dim.Segments)
+                        {
+                            if (sIdx < sortedFaces.Count - 1)
+                            {
+                                FaceData fA = sortedFaces[sIdx];
+                                FaceData fB = sortedFaces[sIdx + 1];
+                                if (breakZones.Any(hz => fA.Z < hz.bottom && fB.Z > hz.top))
+                                {
+                                    // Типовой шаг — интервал соседнего видимого сегмента
+                                    double step = sIdx > 0
+                                        ? sortedFaces[sIdx].Z - sortedFaces[sIdx - 1].Z
+                                        : sIdx + 2 < sortedFaces.Count
+                                            ? sortedFaces[sIdx + 2].Z - sortedFaces[sIdx + 1].Z
+                                            : 0;
+
+                                    if (step > 1e-6)
+                                    {
+                                        double span = fB.Z - fA.Z;
+                                        int count = (int)Math.Round(span / step);
+                                        double tolerance = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
+                                        if (count > 0 && Math.Abs(count * step - span) < tolerance)
+                                        {
+                                            int stepMm = (int)Math.Round(
+                                                UnitUtils.ConvertFromInternalUnits(step, UnitTypeId.Millimeters));
+                                            seg.Prefix = $"{stepMm}×{count}=";
+                                        }
+                                    }
+                                }
+                            }
+                            sIdx++;
+                        }
+                    }
+                    catch { }
+                }
             }
         }
 
@@ -1307,7 +1595,7 @@ namespace DAN_Plugin
                 if (dimType != null) doc.Create.NewDimension(section, line1, ra1, dimType);
                 else doc.Create.NewDimension(section, line1, ra1);
             }
-            catch (Exception ex) { TaskDialog.Show("Предупреждение (длина стены)", ex.Message); }
+            catch (Exception ex) { _warnings.Add($"Длина стены: {ex.Message}"); }
 
             // Собираем оси, пересекающие стену (перпендикулярные ей и в пределах пролёта)
             double eps = UnitUtils.ConvertToInternalUnits(10, UnitTypeId.Millimeters);
@@ -1352,7 +1640,7 @@ namespace DAN_Plugin
                 if (dimType != null) doc.Create.NewDimension(section, line2, ra2, dimType);
                 else doc.Create.NewDimension(section, line2, ra2);
             }
-            catch (Exception ex) { TaskDialog.Show("Предупреждение (привязка к осям)", ex.Message); }
+            catch (Exception ex) { _warnings.Add($"Привязка к осям: {ex.Message}"); }
         }
 
         /// <summary>
@@ -1669,7 +1957,7 @@ namespace DAN_Plugin
                             if (dimType != null) doc.Create.NewDimension(section, vline, ra, dimType);
                             else doc.Create.NewDimension(section, vline, ra);
                         }
-                        catch (Exception ex) { TaskDialog.Show("Предупреждение (высота проёма)", ex.Message); }
+                        catch (Exception ex) { _warnings.Add($"Высота проёма: {ex.Message}"); }
                     }
                 }
 
@@ -1717,7 +2005,7 @@ namespace DAN_Plugin
                             if (dimType != null) doc.Create.NewDimension(section, hline, ra, dimType);
                             else doc.Create.NewDimension(section, hline, ra);
                         }
-                        catch (Exception ex) { TaskDialog.Show("Предупреждение (ширина проёма)", ex.Message); }
+                        catch (Exception ex) { _warnings.Add($"Ширина проёма: {ex.Message}"); }
                     }
                 }
             }
@@ -1903,7 +2191,7 @@ namespace DAN_Plugin
             if (viewTemplate != null)
                 newSection.ViewTemplateId = viewTemplate.Id;
             else
-                TaskDialog.Show("Предупреждение", "Шаблон вида \"*01_КЖ_(04_Стены)_Сечение\" не найден.");
+                _warnings.Add("Шаблон вида \"*01_КЖ_(04_Стены)_Сечение\" не найден.");
 
             Parameter markParam = newSection.LookupParameter("BI_марка_конструкции");
             if (markParam != null && !markParam.IsReadOnly)
