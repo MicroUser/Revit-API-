@@ -725,13 +725,37 @@ namespace DAN_Plugin
             PlaceWallDimensions(doc, sectionView, wall, wallDir, upDir, cutZ, items, diagSb);
 
             // ── Размеры поперёк стены (толщина / привязки) ───────────────────
-            PlaceCrossDimensions(doc, sectionView, wall, wallDir, upDir, cutZ, items, wallLine);
+            PlaceCrossDimensions(doc, sectionView, wall, wallDir, upDir, cutZ, items, wallLine, diagSb);
 
             // ── Марки горизонтальных стержней формы 1 ───────────────────────
             PlaceHorizontalBarTags(doc, sectionView, wallDir, upDir, cutZ, wallLine, hItems);
 
+            // ── Диагностика П-шек ─────────────────────────────────────────────
+            {
+                var pDiag = new System.Text.StringBuilder();
+                int pTotal = 0;
+                foreach (Element rb in allRebar)
+                {
+                    Rebar pr = rb as Rebar;
+                    if (pr == null) continue;
+                    RebarShape ps = doc.GetElement(pr.GetShapeId()) as RebarShape;
+                    if (ps == null) continue;
+                    bool isP = ps.Name.StartsWith("(форма)П-шка", StringComparison.OrdinalIgnoreCase)
+                            || ps.Name.Equals("(форма)21", StringComparison.OrdinalIgnoreCase);
+                    if (!isP) continue;
+
+                    pTotal++;
+                    string posStr = pr.LookupParameter("BI_позиция")?.AsString()
+                                 ?? pr.LookupParameter("BI_позиция")?.AsInteger().ToString()
+                                 ?? "—";
+                    pDiag.AppendLine($"  id={pr.Id.IntegerValue} форма={ps.Name} " +
+                                     $"поз={posStr} кол={pr.NumberOfBarPositions}");
+                }
+                diagSb.AppendLine($"\n=== П-шки на виде: {pTotal} ===");
+                if (pTotal > 0) diagSb.Append(pDiag);
+            }
+
             // ── Марки для П-шек ────────────────────────────────────────────────
-            // Match both "(форма)П-шка" and "(форма)П-шка равносторонний"
             const string pShapePrefix = "(форма)П-шка";
 
             FamilySymbol tagPosShag = new FilteredElementCollector(doc)
@@ -759,8 +783,10 @@ namespace DAN_Plugin
                     if (pRebar == null) continue;
 
                     RebarShape pShape = doc.GetElement(pRebar.GetShapeId()) as RebarShape;
-                    if (pShape == null || !pShape.Name.StartsWith(pShapePrefix, StringComparison.OrdinalIgnoreCase))
-                        continue;
+                    if (pShape == null) continue;
+                    bool isPShape = pShape.Name.StartsWith(pShapePrefix, StringComparison.OrdinalIgnoreCase)
+                                 || pShape.Name.Equals("(форма)21", StringComparison.OrdinalIgnoreCase);
+                    if (!isPShape) continue;
 
                     // Compute W/U range from the first bar's centerline curves.
                     // Using bar 0 keeps the tag anchored to the visible bar in the section
@@ -847,9 +873,12 @@ namespace DAN_Plugin
             Document doc, ViewSection sectionView, Wall wall,
             XYZ wallDir, XYZ upDir, double cutZ,
             List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)> items,
-            Line wallLine)
+            Line wallLine,
+            System.Text.StringBuilder diagSb = null)
         {
             if (!items.Any()) return;
+
+            double ToMmU(double v) => Math.Round(UnitUtils.ConvertFromInternalUnits(v, UnitTypeId.Millimeters));
 
             XYZ MakePt(double w, double u) =>
                 wallDir.Multiply(w) + upDir.Multiply(u) + XYZ.BasisZ.Multiply(cutZ);
@@ -879,6 +908,7 @@ namespace DAN_Plugin
                             PlanarFace pf = f as PlanarFace;
                             if (pf?.Reference == null) continue;
                             if (Math.Abs(pf.FaceNormal.Normalize().DotProduct(upDir)) < 0.99) continue;
+                            if (!FaceOverlapsCrop(sectionView, pf)) continue; // грань невидимого проёма за CropBox
                             double u = pf.Origin.DotProduct(upDir);
                             if (!facesU.Any(r => Math.Abs(r.u - u) < 1e-4))
                                 facesU.Add((pf.Reference, u));
@@ -914,7 +944,7 @@ namespace DAN_Plugin
             double uMaxRebar = items.Max(r => r.uProj);
             double rowTol    = UnitUtils.ConvertToInternalUnits(20, UnitTypeId.Millimeters);
 
-            Reference FindRebarRefAtU(double targetU)
+            (Reference rf, int elemId, double uFound) FindRebarRefAtU(double targetU)
             {
                 foreach (var item in items.OrderBy(r => Math.Abs(r.uProj - targetU)))
                 {
@@ -924,25 +954,37 @@ namespace DAN_Plugin
                     var c = lrs.Where(lr => Math.Abs(lr.uCoord - targetU) < rowTol)
                                .OrderBy(lr => Math.Abs(lr.uCoord - targetU))
                                .FirstOrDefault();
-                    if (c.rf != null) return c.rf;
+                    if (c.rf != null) return (c.rf, item.elem.Id.IntegerValue, c.uCoord);
                 }
-                return null;
+                return (null, -1, 0);
             }
 
-            Reference frontRef = FindRebarRefAtU(uMinRebar);
-            Reference backRef  = Math.Abs(uMaxRebar - uMinRebar) > rowTol
-                                 ? FindRebarRefAtU(uMaxRebar) : null;
+            var frResult = FindRebarRefAtU(uMinRebar);
+            Reference frontRef = frResult.rf;
+            var brResult = Math.Abs(uMaxRebar - uMinRebar) > rowTol
+                           ? FindRebarRefAtU(uMaxRebar) : (null, -1, 0.0);
+            Reference backRef = brResult.rf;
+
+            diagSb?.AppendLine("\n=== PlaceCrossDimensions ===");
+            diagSb?.AppendLine($"  facesU ({facesU.Count}): {string.Join(", ", facesU.Select(f => $"{ToMmU(f.u)}мм"))}");
+            diagSb?.AppendLine($"  gridRefs: {gridRefs.Count}");
+            diagSb?.AppendLine($"  items uProj: {string.Join(", ", items.Select(r => $"{ToMmU(r.uProj)}мм"))}");
+            diagSb?.AppendLine($"  uMinRebar={ToMmU(uMinRebar)}мм  uMaxRebar={ToMmU(uMaxRebar)}мм  diff={ToMmU(Math.Abs(uMaxRebar - uMinRebar))}мм  rowTol={ToMmU(rowTol)}мм");
+            diagSb?.AppendLine($"  frontRef: {(frontRef != null ? $"найден  elemId={frResult.elemId}  uFound={ToMmU(frResult.uFound)}мм" : "НЕ найден")}");
+            diagSb?.AppendLine($"  backRef:  {(backRef  != null ? $"найден  elemId={brResult.elemId}  uFound={ToMmU(brResult.uFound)}мм" : (Math.Abs(uMaxRebar - uMinRebar) <= rowTol ? "NULL — один ряд (uMin==uMax)" : "НЕ найден"))}");
+            if (frontRef != null && backRef != null)
+                diagSb?.AppendLine($"  sameElement: {frResult.elemId == brResult.elemId}");
 
             // Создание размера вдоль upDir
-            void CreateDim(double lineW, ReferenceArray ra)
+            Dimension CreateDim(double lineW, ReferenceArray ra)
             {
-                if (ra.Size < 2) return;
+                if (ra.Size < 2) return null;
                 XYZ p1 = MakePt(lineW, faceMin.u - marginU);
                 XYZ p2 = MakePt(lineW, faceMax.u + marginU);
-                if ((p2 - p1).GetLength() < 1e-6) return;
+                if ((p2 - p1).GetLength() < 1e-6) return null;
                 Line dl;
-                try { dl = Line.CreateBound(p1, p2); } catch { return; }
-                try { doc.Create.NewDimension(sectionView, dl, ra); } catch { }
+                try { dl = Line.CreateBound(p1, p2); } catch { return null; }
+                try { return doc.Create.NewDimension(sectionView, dl, ra); } catch { return null; }
             }
 
             // 1. Толщина стены (крайний левый)
@@ -953,7 +995,8 @@ namespace DAN_Plugin
                 CreateDim(wallWLeft - 2 * dimSpacing, ra);
             }
 
-            // 2. Цепочка: грань → перед. арматура → [оси] → задн. арматура → грань (левее)
+            // 2. Цепочка: грань → перед. арматура → [оси] → задн. арматура → грань
+            //    Если осей нет — просто грань → арматура → грань
             {
                 var ra = new ReferenceArray();
                 ra.Append(faceMin.rf);
@@ -961,7 +1004,24 @@ namespace DAN_Plugin
                 foreach (var gr in gridRefs) ra.Append(gr.rf);
                 if (backRef  != null) ra.Append(backRef);
                 ra.Append(faceMax.rf);
-                CreateDim(wallWLeft - dimSpacing, ra);
+                diagSb?.AppendLine($"  dim2 ra.Size={ra.Size}");
+                Dimension dim2 = CreateDim(wallWLeft - dimSpacing, ra);
+                if (diagSb != null && dim2 != null)
+                {
+                    doc.Regenerate();
+                    var segs2 = dim2.Segments;
+                    if (segs2 != null && segs2.Size > 0)
+                    {
+                        var sb2 = new System.Text.StringBuilder("  dim2 сегменты: ");
+                        for (int i = 0; i < segs2.Size; i++)
+                            sb2.Append($"[{i}]={ToMmU(segs2.get_Item(i).Value ?? 0)}мм ");
+                        diagSb.AppendLine(sb2.ToString());
+                    }
+                    else
+                        diagSb?.AppendLine($"  dim2 Value={ToMmU(dim2.Value ?? 0)}мм (нет сегментов)");
+                }
+                else if (diagSb != null)
+                    diagSb.AppendLine("  dim2: НЕ создан");
             }
 
             // 3. Привязка к оси: грань → [оси] → грань (справа)
@@ -1016,6 +1076,7 @@ namespace DAN_Plugin
                             PlanarFace pf = f as PlanarFace;
                             if (pf?.Reference == null) continue;
                             if (Math.Abs(pf.FaceNormal.Normalize().DotProduct(wallDir)) < 0.99) continue;
+                            if (!FaceOverlapsCrop(sectionView, pf)) continue; // грань невидимого проёма за CropBox
                             double coord = pf.Origin.DotProduct(wallDir);
                             if (!wallFaceRefs.Any(r => Math.Abs(r.coord - coord) < 1e-4))
                                 wallFaceRefs.Add((pf.Reference, coord));
@@ -1066,17 +1127,25 @@ namespace DAN_Plugin
                     double wFirst = sorted.First().wProj;
                     double wLast  = sorted.Last().wProj;
 
+                    // ВАЖНО: используем найденную геометрическую edge-ссылку (lineRef) всегда,
+                    // если она есть — без проверки допуска. Subelement-ссылка (tagRef) годится
+                    // для IndependentTag, но NewDimension может тихо отбросить её как witness,
+                    // из-за чего соседние отрезки размерной цепи сливаются в один (без ошибки).
                     var lineRefs = GetVerticalBarLineRefs(rebar, sectionView, wallDir, upDir);
 
+                    // Среди рёбер в одном W-столбце (в пределах matchTol от ближайшего)
+                    // всегда берём нижний ряд (наибольший uCoord = wallMaxU), а не
+                    // первый по сортировке — иначе привязка случайно прыгает между
+                    // верхним и нижним рядом стержней.
                     Reference refFirst = sorted.First().tagRef;
                     if (lineRefs.Any())
                     {
+                        double bestFirstDiff = lineRefs.Min(r => Math.Abs(r.wCoord - wFirst));
                         var bestFirst = lineRefs
-                            .OrderBy(r => Math.Abs(r.wCoord - wFirst))
-                            .ThenByDescending(r => r.uCoord)
+                            .Where(r => Math.Abs(r.wCoord - wFirst) <= bestFirstDiff + matchTol)
+                            .OrderByDescending(r => r.uCoord)
                             .First();
-                        if (Math.Abs(bestFirst.wCoord - wFirst) < matchTol * 3)
-                            refFirst = bestFirst.rf;
+                        refFirst = bestFirst.rf;
                     }
 
                     Reference refLast = sorted.Last().tagRef;
@@ -1085,12 +1154,12 @@ namespace DAN_Plugin
                         var others = lineRefs.Where(r => Math.Abs(r.wCoord - wFirst) > matchTol).ToList();
                         if (others.Any())
                         {
+                            double bestLastDiff = others.Min(r => Math.Abs(r.wCoord - wLast));
                             var bestLast = others
-                                .OrderBy(r => Math.Abs(r.wCoord - wLast))
-                                .ThenByDescending(r => r.uCoord)
+                                .Where(r => Math.Abs(r.wCoord - wLast) <= bestLastDiff + matchTol)
+                                .OrderByDescending(r => r.uCoord)
                                 .First();
-                            if (Math.Abs(bestLast.wCoord - wLast) < matchTol * 3)
-                                refLast = bestLast.rf;
+                            refLast = bestLast.rf;
                         }
                     }
 
@@ -1328,7 +1397,7 @@ namespace DAN_Plugin
                 {
                     Dimension dim = doc.Create.NewDimension(sectionView, dimLine, ra);
 
-                    if (dim != null && arraySpans.Any())
+                    if (dim != null && (arraySpans.Any() || mergedAnnotations.Any() || sequentialChains.Any()))
                     {
                         doc.Regenerate();
                         double threshold = UnitUtils.ConvertToInternalUnits(600, UnitTypeId.Millimeters);
@@ -1347,91 +1416,87 @@ namespace DAN_Plugin
 
                         if (segs != null)
                         {
-                            // Накопительный обход: идём по сегментам слева направо,
-                            // сопоставляем [segStart..segEnd] с arraySpans по W-позиции.
-                            double cumW = segLeft.coord;
-                            for (int si2 = 0; si2 < segs.Size; si2++)
+                            // Индексный обход: сегмент si2 соответствует паре
+                            // barPositions[si2-1]..barPositions[si2] (si2=0 и si2=last — покрытие).
+                            // ra = [segLeft, bp[0], bp[1], ..., bp[n-1], segRight]
+                            // segs.Size = barPositions.Count + 1
+                            for (int si2 = 1; si2 < segs.Size - 1; si2++)
                             {
                                 DimensionSegment seg = segs.get_Item(si2);
-                                if (!seg.Value.HasValue || seg.Value.Value < 1e-6) continue;
-                                double segLen   = seg.Value.Value;
-                                double segStart = cumW;
-                                double segEnd   = cumW + segLen;
-                                cumW = segEnd;
+                                if (seg == null || !seg.Value.HasValue || seg.Value.Value < 1e-6) continue;
+                                double segLen = seg.Value.Value;
 
-                                // Сначала проверяем слитые шахматные span-ы
+                                int bpLeft  = si2 - 1;
+                                int bpRight = si2;
+                                if (bpRight >= barPositions.Count)
+                                {
+                                    diagSb?.AppendLine($"    seg[{si2}] ПРОПУСК: bpRight={bpRight} >= barPositions.Count={barPositions.Count}");
+                                    continue;
+                                }
+
+                                double wLeft  = barPositions[bpLeft].wCoord;
+                                double wRight = barPositions[bpRight].wCoord;
+                                diagSb?.AppendLine($"    seg[{si2}] wLeft={ToMmD(wLeft)}мм wRight={ToMmD(wRight)}мм segLen={ToMmD(segLen)}мм");
+
+                                // Слитые шахматные span-ы
                                 int mIdx = mergedAnnotations.FindIndex(ma =>
-                                    Math.Abs(ma.wFirst - segStart) < matchTol * 4 &&
-                                    Math.Abs(ma.wLast  - segEnd  ) < matchTol * 4);
+                                    Math.Abs(ma.wFirst - wLeft)  < matchTol * 4 &&
+                                    Math.Abs(ma.wLast  - wRight) < matchTol * 4);
                                 if (mIdx >= 0)
                                 {
                                     var ma = mergedAnnotations[mIdx];
-                                    int mSpacingMm = (int)Math.Round(
-                                        UnitUtils.ConvertFromInternalUnits(ma.effSpacing, UnitTypeId.Millimeters));
-                                    int mNSpaces = ma.totalBars - 1;
-                                    string mAnn  = $"{mSpacingMm}х{mNSpaces}";
-                                    diagSb?.AppendLine($"    seg[{si2}] [{ToMmD(segStart)}..{ToMmD(segEnd)}]: "
-                                        + $"merged eff={mSpacingMm}мм n={ma.totalBars}");
-                                    if (segLen < threshold)
-                                        seg.ValueOverride = mAnn;
-                                    else
-                                        seg.Prefix = mAnn + "=";
-                                    diagSb?.AppendLine($"      → merged ann=\"{mAnn}\"");
+                                    int mSpMm   = (int)Math.Round(UnitUtils.ConvertFromInternalUnits(ma.effSpacing, UnitTypeId.Millimeters));
+                                    string mAnn = $"{mSpMm}х{ma.totalBars - 1}";
+                                    diagSb?.AppendLine($"    seg[{si2}] bp[{bpLeft}..{bpRight}]: merged eff={mSpMm}мм n={ma.totalBars} → \"{mAnn}\"");
+                                    if (segLen < threshold) seg.ValueOverride = mAnn;
+                                    else                    seg.Prefix = mAnn + "=";
                                     continue;
                                 }
 
-                                // Проверяем последовательные цепочки n=2
+                                // Последовательные цепочки n=2
                                 int scIdx = sequentialChains.FindIndex(sc =>
-                                    Math.Abs(sc.wFirst - segStart) < matchTol * 4 &&
-                                    Math.Abs(sc.wLast  - segEnd  ) < matchTol * 4);
+                                    Math.Abs(sc.wFirst - wLeft)  < matchTol * 4 &&
+                                    Math.Abs(sc.wLast  - wRight) < matchTol * 4);
                                 if (scIdx >= 0)
                                 {
                                     var sc = sequentialChains[scIdx];
-                                    int scSpMm = (int)Math.Round(
-                                        UnitUtils.ConvertFromInternalUnits(sc.spacing, UnitTypeId.Millimeters));
+                                    int scSpMm   = (int)Math.Round(UnitUtils.ConvertFromInternalUnits(sc.spacing, UnitTypeId.Millimeters));
                                     string scAnn = $"{scSpMm}х{sc.nSpaces}";
-                                    diagSb?.AppendLine($"    seg[{si2}] [{ToMmD(segStart)}..{ToMmD(segEnd)}]: "
-                                        + $"seqChain sp={scSpMm}мм n={sc.nSpaces}");
-                                    if (segLen < threshold)
-                                        seg.ValueOverride = scAnn;
-                                    else
-                                        seg.Prefix = scAnn + "=";
-                                    diagSb?.AppendLine($"      → seq ann=\"{scAnn}\"");
+                                    diagSb?.AppendLine($"    seg[{si2}] bp[{bpLeft}..{bpRight}]: seqChain sp={scSpMm}мм n={sc.nSpaces} → \"{scAnn}\"");
+                                    if (segLen < threshold) seg.ValueOverride = scAnn;
+                                    else                    seg.Prefix = scAnn + "=";
                                     continue;
                                 }
 
-                                // Ищем arraySpan, чьи wFirst/wLast совпадают с этим отрезком
+                                // Обычный массив
                                 var matchSpan = arraySpans.FirstOrDefault(sp =>
-                                    Math.Abs(sp.wFirst - segStart) < matchTol * 4 &&
-                                    Math.Abs(sp.wLast  - segEnd  ) < matchTol * 4);
-
-                                if (matchSpan.rebar == null) continue;
-
-                                int count = matchSpan.rebar.NumberOfBarPositions;
-                                diagSb?.AppendLine($"    seg[{si2}] [{ToMmD(segStart)}..{ToMmD(segEnd)}]: "
-                                    + $"val={ToMmD(segLen)}мм count={count}");
-                                if (count <= 2) { diagSb?.AppendLine($"      → пропущен (count<=2)"); continue; }
-
-                                double spacing = 0;
-                                Parameter sp2 = matchSpan.rebar.get_Parameter(BuiltInParameter.REBAR_ELEM_BAR_SPACING);
-                                if (sp2 != null && sp2.HasValue) spacing = sp2.AsDouble();
-                                if (spacing < 1e-6) spacing = segLen / (count - 1);
-
-                                int spacingMm = (int)Math.Round(
-                                    UnitUtils.ConvertFromInternalUnits(spacing, UnitTypeId.Millimeters));
-                                int nSpaces = count - 1;
-                                string ann  = $"{spacingMm}х{nSpaces}";
-
-                                if (segLen < threshold)
+                                    Math.Abs(sp.wFirst - wLeft)  < matchTol * 4 &&
+                                    Math.Abs(sp.wLast  - wRight) < matchTol * 4);
+                                if (matchSpan.rebar == null)
                                 {
-                                    seg.ValueOverride = ann;
-                                    diagSb?.AppendLine($"      → ValueOverride=\"{ann}\"");
+                                    diagSb?.AppendLine($"    seg[{si2}] → НЕТ СОВПАДЕНИЯ (нет массива для wLeft={ToMmD(wLeft)} wRight={ToMmD(wRight)})");
+                                    diagSb?.AppendLine($"      доступные spans: {string.Join("; ", arraySpans.Select(sp => $"[{ToMmD(sp.wFirst)}..{ToMmD(sp.wLast)}]"))}");
+                                    diagSb?.AppendLine($"      merged: {string.Join("; ", mergedAnnotations.Select(ma => $"[{ToMmD(ma.wFirst)}..{ToMmD(ma.wLast)}]"))}");
+                                    continue;
                                 }
-                                else
+
+                                int cnt = matchSpan.rebar.NumberOfBarPositions;
+                                if (cnt <= 2)
                                 {
-                                    seg.Prefix = ann + "=";
-                                    diagSb?.AppendLine($"      → Prefix=\"{ann}=\"");
+                                    diagSb?.AppendLine($"    seg[{si2}] → ПРОПУСК: span найден но cnt={cnt} <= 2");
+                                    continue;
                                 }
+
+                                double sp3 = 0;
+                                Parameter sp2p = matchSpan.rebar.get_Parameter(BuiltInParameter.REBAR_ELEM_BAR_SPACING);
+                                if (sp2p != null && sp2p.HasValue) sp3 = sp2p.AsDouble();
+                                if (sp3 < 1e-6) sp3 = segLen / (cnt - 1);
+
+                                int spMm  = (int)Math.Round(UnitUtils.ConvertFromInternalUnits(sp3, UnitTypeId.Millimeters));
+                                string ann = $"{spMm}х{cnt - 1}";
+                                diagSb?.AppendLine($"    seg[{si2}] bp[{bpLeft}..{bpRight}]: span sp={spMm}мм n={cnt} → \"{ann}\"");
+                                if (segLen < threshold) seg.ValueOverride = ann;
+                                else                    seg.Prefix = ann + "=";
                             }
                         }
 
@@ -1442,6 +1507,44 @@ namespace DAN_Plugin
                     TaskDialog.Show("Размеры", $"Ошибка создания размерной цепи: {ex.Message}");
                 }
             }
+        }
+
+        // Проверяет, попадает ли грань (хотя бы частично) в CropBox вида.
+        // wall.get_Geometry возвращает полную 3D-геометрию стены, включая грани
+        // проёмов, расположенных за пределами видимой (обрезанной) области вида —
+        // без этой проверки такие грани ложно считаются границами сегмента стены.
+        private static bool FaceOverlapsCrop(View view, Face face)
+        {
+            if (!view.CropBoxActive) return true;
+            BoundingBoxXYZ crop = view.CropBox;
+            if (crop == null) return true;
+
+            Transform toCrop = crop.Transform.Inverse;
+            double tol = 1e-4;
+
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            double minZ = double.MaxValue, maxZ = double.MinValue;
+
+            foreach (EdgeArray loop in face.EdgeLoops)
+            {
+                foreach (Edge e in loop)
+                {
+                    foreach (XYZ wp in e.Tessellate())
+                    {
+                        XYZ l = toCrop.OfPoint(wp);
+                        if (l.X < minX) minX = l.X; if (l.X > maxX) maxX = l.X;
+                        if (l.Y < minY) minY = l.Y; if (l.Y > maxY) maxY = l.Y;
+                        if (l.Z < minZ) minZ = l.Z; if (l.Z > maxZ) maxZ = l.Z;
+                    }
+                }
+            }
+            if (minX > maxX) return true; // не смогли определить — не исключаем
+
+            bool overlapX = maxX >= crop.Min.X - tol && minX <= crop.Max.X + tol;
+            bool overlapY = maxY >= crop.Min.Y - tol && minY <= crop.Max.Y + tol;
+            bool overlapZ = maxZ >= crop.Min.Z - tol && minZ <= crop.Max.Z + tol;
+            return overlapX && overlapY && overlapZ;
         }
 
         private static List<(Reference rf, double wCoord, double uCoord)> GetVerticalBarLineRefs(
@@ -1493,8 +1596,14 @@ namespace DAN_Plugin
         {
             if (rf == null) return;
             if (Math.Abs(ln.Direction.Normalize().Z) < 0.99) return;
-            double wCoord = ln.GetEndPoint(0).DotProduct(wallDir);
-            double uCoord = ln.GetEndPoint(0).DotProduct(upDir);
+            XYZ p0 = ln.GetEndPoint(0);
+            XYZ p1 = ln.GetEndPoint(1);
+            double wCoord = p0.DotProduct(wallDir);
+            // uCoord = самый нижний конец ребра (largest uProj = нижний ряд).
+            // GetEndPoint(0) — произвольный конец (направление ребра у разных
+            // "ножек" одной шпильки/хомута может быть развёрнуто по-разному),
+            // поэтому без Max() сравнение верх/низ между рёбрами не надёжно.
+            double uCoord = Math.Max(p0.DotProduct(upDir), p1.DotProduct(upDir));
             acc.Add((rf, wCoord, uCoord));
         }
 
