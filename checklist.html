@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Чек-лист проверки КЖ</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bd:#1F4E79;--bm:#2E75B6;--bl:#D6E4F0;--bp:#EBF3FB;
+  --gn:#E2EFDA;--gd:#375623;
+  --rl:#FCE4E4;--rd:#C00000;
+  --am:#FFF2CC;--ad:#BF8F00;
+  --gl:#F5F5F5;--gm:#D0D0D0;--gx:#555;
+  --tx:#1a1a1a;--br:#BBBBBB;
+}
+body{font-family:Arial,sans-serif;font-size:13px;color:var(--tx);background:#e8eef5;padding:12px}
+
+/* STEP NAV */
+.step-nav{display:flex;border-radius:6px 6px 0 0;overflow:hidden;border:1px solid var(--br);border-bottom:none}
+.stab{flex:1;padding:11px 6px;text-align:center;font-size:11px;font-weight:700;background:#f0f4f8;color:var(--gx);cursor:pointer;border-right:1px solid var(--br);transition:background .15s;user-select:none;position:relative;line-height:1.3}
+.stab:last-child{border-right:none}
+.stab.active{background:var(--bd);color:#fff}
+.stab.done::after{content:"✓";position:absolute;top:4px;right:6px;font-size:10px;color:#4CAF50}
+.stab.active.done::after{color:#a8e6cf}
+.step{display:none}.step.active{display:block}
+.role-badge{display:none;align-items:center;padding:0 12px;font-size:11px;font-weight:700;white-space:nowrap;border-left:1px solid var(--br)}
+.role-badge[class*=" role-"]{display:flex}
+.role-reviewer{background:#e8f5e9;color:#2e7d32}
+.role-executor{background:#fff3e0;color:#e65100}
+
+/* CARD */
+.card{background:#fff;border:1px solid var(--br);border-top:none;border-radius:0 0 6px 6px;overflow:hidden}
+.hdr{background:var(--bd);color:#fff;padding:14px 20px 10px}
+.hdr h1{font-size:17px;font-weight:700;margin-bottom:2px}
+.hdr .sub{font-size:11px;opacity:.8}
+
+/* META GRID */
+.meta{background:var(--bp);border-bottom:1px solid var(--bl);padding:12px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 16px}
+.mf label{display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--bm);margin-bottom:3px}
+.mf input{width:100%;border:1px solid var(--br);border-radius:4px;padding:5px 8px;font-size:12px;font-family:Arial,sans-serif;background:#fff;color:var(--tx)}
+.mf input:focus{outline:none;border-color:var(--bm);box-shadow:0 0 0 2px rgba(46,117,182,.2)}
+.mf.full{grid-column:1/-1}
+
+/* EXECUTORS LIST */
+#pexec-list{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.pexec-row{display:flex;align-items:center;gap:6px}
+.pexec-row input{flex:1;border:1px solid var(--br);border-radius:4px;padding:5px 8px;font-size:12px;font-family:Arial,sans-serif;background:#fff;color:var(--tx)}
+.pexec-row input:focus{outline:none;border-color:var(--bm);box-shadow:0 0 0 2px rgba(46,117,182,.2)}
+.pexec-del{width:28px;height:28px;flex-shrink:0;border:1px solid var(--br);border-radius:4px;background:#fff;color:var(--rd);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s}
+.pexec-del:hover{background:var(--rl);border-color:var(--rd)}
+.pexec-add{font-size:11px}
+
+/* BTNS */
+.btn{border:1px solid var(--br);border-radius:4px;padding:5px 13px;font-size:11px;font-family:Arial,sans-serif;cursor:pointer;background:#fff;color:var(--tx);transition:background .15s}
+.btn:hover{background:var(--gl);border-color:var(--bm)}
+.btn.blue{background:var(--bm);color:#fff;border-color:var(--bm)}.btn.blue:hover{background:var(--bd)}
+.btn.green{background:#4CAF50;color:#fff;border-color:#4CAF50}.btn.green:hover{background:#388E3C}
+.btn.next{background:var(--bd);color:#fff;border-color:var(--bd);padding:7px 22px;font-size:12px;font-weight:700}.btn.next:hover{background:#163a5f}
+
+.toolbar{background:#fff;border-bottom:1px solid var(--br);padding:8px 20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.toolbar>span{font-size:11px;color:var(--gx)}
+.stats{margin-left:auto;display:flex;gap:12px;font-size:11px}
+.stat{display:flex;align-items:center;gap:4px}
+.dot{width:10px;height:10px;border-radius:50%}
+.dok{background:#4CAF50}.dfail{background:var(--rd)}.dna{background:var(--gm)}
+.sn{font-weight:700}
+
+/* CHECKLIST TABLE */
+.ctable{width:100%;border-collapse:collapse}
+.ctable thead tr{background:var(--bd);color:#fff;font-size:11px}
+.ctable thead th{padding:7px 8px;text-align:left;font-weight:700}
+.ctable tbody tr{border-bottom:1px solid #e8e8e8;transition:background .1s}
+.ctable tbody tr:hover{background:#F7FAFD}
+.ctable tbody tr.rok{background:#F0FAF0}
+.ctable tbody tr.rfail{background:#FFF5F5}
+.ctable tbody tr.rna{background:var(--gl);opacity:.78}
+.ctable td{padding:6px 8px;vertical-align:top}
+.cn{width:34px;text-align:center;color:var(--gx);font-size:11px}
+.cc{width:108px;text-align:center}
+
+/* SECTION HDR ROW */
+.shdr td{background:var(--bl);color:var(--bd);font-weight:700;font-size:12px;padding:7px 10px;cursor:pointer;user-select:none;border-top:1px solid var(--br)}
+.shdr td:hover{background:#C4D9EE}
+.shdr .ico{float:right;font-size:10px;transition:transform .2s;margin-top:1px}
+.shdr.col .ico{transform:rotate(-90deg)}
+.mhdr td{background:#EEF4FB;color:var(--bd);font-weight:700;font-size:11px;padding:5px 10px 5px 24px;cursor:pointer;user-select:none;border-top:1px solid #dce7f2}
+.mhdr td:hover{background:#E3EEF9}
+.mhdr .ico{float:right;font-size:9px;transition:transform .2s;margin-top:2px}
+.mhdr.col .ico{transform:rotate(-90deg)}
+.mk-badge{display:inline-block;background:var(--bm);color:#fff;border-radius:3px;padding:1px 9px;font-size:11px;letter-spacing:.3px}
+.mk-resp{margin-left:16px;font-weight:normal;color:var(--gx);font-size:10px}
+.mrsel{border:1px solid var(--br);border-radius:3px;padding:1px 3px;font-size:10px;font-family:Arial,sans-serif;color:var(--tx);background:#fff;cursor:pointer;max-width:160px}
+.mrsel:focus{outline:none;border-color:var(--bm)}
+.inv-empty{padding:20px;color:var(--gx);font-size:12px;line-height:1.5}
+
+/* EDITABLE */
+.edt[contenteditable],.noi,.nri{width:100%;border:1px solid transparent;border-radius:3px;padding:2px 5px;font-size:12px;font-family:Arial,sans-serif;color:var(--tx);background:transparent;resize:none;overflow:hidden;transition:border-color .15s,background .15s}
+.edt[contenteditable]:hover,.noi:hover,.nri:hover{border-color:var(--br);background:#fff}
+.edt[contenteditable]:focus,.noi:focus,.nri:focus{outline:none;border-color:var(--bm);background:#fff;box-shadow:0 0 0 2px rgba(46,117,182,.15)}
+.rsel{width:100%;border:1px solid var(--br);border-radius:3px;padding:3px 4px;font-size:11px;font-family:Arial,sans-serif;color:var(--tx);background:#fff;cursor:pointer}
+.rsel:focus{outline:none;border-color:var(--bm);box-shadow:0 0 0 2px rgba(46,117,182,.15)}
+
+/* STATUS BTNS */
+.cg{display:flex;gap:4px;justify-content:center}
+.cb{width:30px;height:26px;border:1px solid var(--br);border-radius:4px;font-size:13px;cursor:pointer;background:#fff;display:flex;align-items:center;justify-content:center;transition:background .12s,transform .1s}
+.cb:hover{transform:scale(1.12);border-color:var(--bm)}
+.cb.aok{background:#4CAF50;border-color:#388E3C;color:#fff}
+.cb.afail{background:var(--rd);border-color:#8B0000;color:#fff}
+.cb.ana{background:var(--gm);border-color:#999}
+
+/* ПОЛЬЗОВАТЕЛЬСКИЕ ПРОВЕРКИ */
+.crow-custom{background:#fffef5}
+.crow-custom .edt{font-style:italic}
+body[data-role="executor"] .crow-add{display:none}
+.btn-rm-custom{border:none;background:none;color:#c0261e;font-size:15px;cursor:pointer;padding:0 4px;line-height:1;vertical-align:middle}
+body[data-role="executor"] .btn-rm-custom{display:none}
+.btn-add-custom{font-size:11px;padding:3px 10px}
+
+/* РОЛЬ: исполнитель — только просмотр (статусы, реквизиты, подписи) */
+body[data-role="executor"] .cb{pointer-events:none;opacity:.65}
+body[data-role="executor"] .btn[onclick^="checkAll"],
+body[data-role="executor"] .btn[onclick="resetAll()"]{pointer-events:none;opacity:.4}
+body[data-role="executor"] .sign-box{pointer-events:none;opacity:.7}
+/* Шаг 1 — реквизиты: все поля и кнопки добавления/удаления */
+body[data-role="executor"] #step0 input,
+body[data-role="executor"] #step0 select,
+body[data-role="executor"] #step0 textarea{pointer-events:none;background:#f5f5f5;color:var(--gx)}
+body[data-role="executor"] #step0 .pexec-add,
+body[data-role="executor"] #step0 .pexec-rm{pointer-events:none;opacity:.35}
+/* Шаг 2 — конструкции: ручные поля и обновление из модели */
+body[data-role="executor"] #step1 input{pointer-events:none;background:#f5f5f5;color:var(--gx)}
+body[data-role="executor"] .btn[onclick="refreshFromModel()"]{pointer-events:none;opacity:.4}
+/* Исполнитель не редактирует текст пунктов */
+body[data-role="executor"] #step2 .edt{pointer-events:none}
+
+/* INVENTORY */
+.inv-sec{padding:14px 20px;border-bottom:1px solid var(--br)}
+.inv-sec h3{font-size:13px;font-weight:700;color:var(--bd);margin-bottom:10px}
+.inv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.icard{border:1px solid var(--br);border-radius:6px;padding:10px 12px;background:#fafafa}
+.icard label.hd{display:block;font-size:11px;font-weight:700;color:var(--bm);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+.irow{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.irow label{font-size:11px;color:var(--gx);width:72px;flex-shrink:0}
+.irow input[type=number],.irow input[type=text]{border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:12px;font-family:Arial,sans-serif;flex:1}
+.irow input:focus{outline:none;border-color:var(--bm)}
+.itog{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-top:6px;padding-top:6px;border-top:1px solid #eee}
+.itog input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:var(--bm)}
+
+/* SUMMARY PAGE */
+.sum-wrap{padding:20px}
+.sh{font-size:13px;font-weight:700;color:var(--bd);margin-bottom:12px;padding-bottom:6px;border-bottom:2px solid var(--bl)}
+.big-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.bst{border-radius:6px;padding:12px 10px;text-align:center}
+.bst .bn{font-size:30px;font-weight:700;line-height:1}
+.bst .bl{font-size:10px;margin-top:2px;opacity:.8}
+.bst.ok{background:var(--gn);color:var(--gd)}.bst.fail{background:var(--rl);color:var(--rd)}
+.bst.na{background:#f0f0f0;color:#555}.bst.pend{background:var(--bl);color:var(--bd)}
+.prog-bar{height:10px;border-radius:5px;background:#e0e0e0;overflow:hidden;margin-bottom:4px}
+.prog-fill{height:100%;border-radius:5px;background:#4CAF50;transition:width .4s}
+.prog-lbl{display:flex;justify-content:space-between;font-size:11px;color:var(--gx);margin-bottom:16px}
+.verdict{display:inline-block;padding:5px 18px;border-radius:20px;font-weight:700;font-size:12px;letter-spacing:.3px}
+.v-pass{background:var(--gn);color:var(--gd)}.v-fail{background:var(--rl);color:var(--rd)}.v-pend{background:var(--am);color:var(--ad)}
+
+/* ИТОГ ROWS */
+.ir{display:flex;align-items:flex-start;padding:11px 0;border-bottom:1px solid #eee;gap:12px}
+.ir:last-child{border-bottom:none}
+.ir-lbl{width:290px;flex-shrink:0;font-weight:600;font-size:12px;line-height:1.4;padding-top:4px}
+.ir-val{flex:1;font-size:12px}
+.ir-val input[type=text],.ir-val input[type=date]{border:1px solid var(--br);border-radius:4px;padding:5px 9px;font-size:12px;font-family:Arial,sans-serif;width:100%;max-width:280px}
+.ir-val input:focus{outline:none;border-color:var(--bm);box-shadow:0 0 0 2px rgba(46,117,182,.2)}
+.auto-n{font-size:22px;font-weight:700;padding:2px 0}
+.auto-n.ok{color:#388E3C}.auto-n.fail{color:var(--rd)}
+
+/* SIGN CHECKBOX */
+.sign-box{display:inline-flex;align-items:center;gap:10px;cursor:pointer;padding:8px 16px;border:2px solid var(--br);border-radius:6px;background:#fff;transition:all .2s;user-select:none;font-size:13px;font-weight:700}
+.sign-box:hover{border-color:var(--bm);background:var(--bp)}
+.sign-box.signed{background:var(--gn);border-color:#4CAF50;color:var(--gd)}
+.sign-box .sbox{width:22px;height:22px;border:2px solid var(--br);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;transition:all .2s}
+.sign-box.signed .sbox{background:#4CAF50;border-color:#4CAF50;color:#fff}
+
+/* BREAKDOWN TABLE */
+.bk-ok{color:#388E3C;font-weight:700;text-align:center}
+.bk-fail{color:var(--rd);font-weight:700;text-align:center}
+.bk-na{color:#888;text-align:center}
+.bk-op{color:var(--bm);text-align:center}
+
+/* FAIL LIST */
+.fail-wrap{margin-top:16px}
+
+.page-footer{padding:12px 20px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--br);gap:8px;flex-wrap:wrap}
+
+.toast{position:fixed;bottom:20px;right:20px;background:var(--bd);color:#fff;padding:10px 18px;border-radius:6px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:9999}
+.toast.show{opacity:1}
+
+/* ── Протокол для печати/PDF (на экране скрыт) ── */
+#report{display:none}
+#report{font-family:Arial,sans-serif;color:#000;line-height:1.35}
+.rep-head{border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:10px}
+.rep-head h1{font-size:16px;margin:0 0 5px;letter-spacing:.5px}
+.rep-proj{font-size:12.5px;font-weight:bold}
+.rep-projsub{font-size:11px;color:#333;margin-top:2px}
+.rep-meta{display:grid;grid-template-columns:1fr 1fr;gap:2px 24px;margin:10px 0}
+.rep-meta div{font-size:10.5px;padding:2px 0;border-bottom:1px dotted #bbb}
+.rep-meta b{color:#333;font-weight:normal}
+.rep-verdict{margin:12px 0 6px;padding:8px 12px;border:1px solid #000;font-weight:bold;font-size:12px;text-align:center}
+.rv-pass{background:#e7f6ec}.rv-fail{background:#fdeaea}.rv-pend{background:#fff6e5}
+.rep-counts{display:flex;gap:12px;justify-content:center;margin:6px 0 4px;font-size:11px}
+.rep-counts span{padding:2px 10px;border-radius:3px;border:1px solid #ccc}
+.rc-ok{background:#e7f6ec}.rc-fail{background:#fdeaea}.rc-na{background:#eee}.rc-open{background:#f3f6fb}
+.rep-secttl{font-size:12px;font-weight:bold;background:#1a4a7a;color:#fff;padding:4px 8px;margin:14px 0 0}
+.rep-tbl{width:100%;border-collapse:collapse;margin-top:4px}
+.rep-tbl th,.rep-tbl td{border:1px solid #999;padding:3px 6px;font-size:10px;text-align:left;vertical-align:top}
+.rep-tbl th{background:#e8eef5}
+.rep-resp{font-size:11px;font-weight:bold;color:#1a4a7a;margin:10px 0 0;padding:3px 2px;border-bottom:1px solid #1a4a7a}
+.rep-resp-n{font-weight:normal;color:#555}
+.rep-mk td{background:#eef3f8;font-weight:bold}
+.st-ok{color:#127a33;font-weight:bold}.st-fail{color:#c0261e;font-weight:bold}.st-na{color:#777}.st-open{color:#b9770e}
+.rep-none{padding:6px 2px;font-size:11px;color:#333}
+.rep-sign{display:flex;gap:24px;margin-top:22px}
+.rep-sign>div{flex:1;font-size:10.5px}
+.rep-sign .sl{border-top:1px solid #000;margin-top:26px;padding-top:3px;color:#333}
+
+@media print{
+  @page{ size:A4; margin:14mm; }
+  html,body{background:#fff;padding:0;margin:0}
+  .step-nav,.step,.toast{display:none!important}
+  #report{display:block!important}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  tr{break-inside:avoid}
+  .rep-secttl{break-after:avoid}
+  .rep-full{break-before:page}
+}
+</style>
+</head>
+<body>
+
+<div class="step-nav">
+  <div class="stab active" onclick="goStep(0)" id="stab0">📋 Шаг 1<br>Реквизиты</div>
+  <div class="stab" onclick="goStep(1)" id="stab1">🏗 Шаг 2<br>Конструкции</div>
+  <div class="stab" onclick="goStep(2)" id="stab2">✓ Шаг 3<br>Проверка</div>
+  <div class="stab" onclick="goStep(3)" id="stab3">📊 Шаг 4<br>Итог</div>
+  <div id="role-badge" class="role-badge"></div>
+</div>
+
+<!-- ══════════ ШАГ 1: РЕКВИЗИТЫ ══════════ -->
+<div class="step active" id="step0">
+<div class="card">
+  <div class="hdr"><h1>ЧЕК-ЛИСТ ПРОВЕРКИ РАЗДЕЛА КЖ</h1><div class="sub">Шаг 1 — Реквизиты проекта</div></div>
+  <div class="meta">
+    <div class="mf full"><label>Наименование проекта</label>
+      <input id="pname" value="Многоквартирный жилой комплекс со встроенными помещениями, г. Шымкент, кв-л 189, уч. 512/1"></div>
+    <div class="mf"><label>Шифр</label><input id="pcode" value="01-2025-8-КЖ"></div>
+    <div class="mf"><label>Блок / объект</label><input id="pblock" value="Блок 8, Том 1, Альбом 3.8"></div>
+    <div class="mf"><label>Организация</label><input id="porg" value="ТОО «Гипроград»"></div>
+    <div class="mf"><label>Стадия</label><input id="pstage" value="РП"></div>
+    <div class="mf full" id="pexec-field">
+      <label>Исполнители</label>
+      <div id="pexec-list"></div>
+      <button type="button" class="btn pexec-add" onclick="addExec()">+ Добавить исполнителя</button>
+    </div>
+    <div class="mf"><label>Ведущий специалист</label><input id="plead" placeholder="ФИО ведущего специалиста"></div>
+    <div class="mf"><label>Дата проверки</label><input id="pdate" type="date"></div>
+    <div class="mf"><label>ПО выпуска</label><input id="psw" value="Autodesk Revit"></div>
+    <div class="mf"><label>Всего листов</label><input id="psheets" type="number" value="163"></div>
+  </div>
+  <div class="page-footer">
+    <span style="font-size:11px;color:var(--gx)">Заполните реквизиты и перейдите к составу конструкций</span>
+    <button class="btn next" onclick="goStep(1)">Далее: Конструкции →</button>
+  </div>
+</div>
+</div>
+
+<!-- ══════════ ШАГ 2: КОНСТРУКЦИИ ══════════ -->
+<div class="step" id="step1">
+<div class="card">
+  <div class="hdr"><h1>СОСТАВ КОНСТРУКЦИЙ</h1><div class="sub">Шаг 2 — Марки из сборок модели (параметр «Комментарии»). Обновляются кнопкой «Обновить из модели».</div></div>
+
+  <div id="inv-summary"></div>
+
+  <div class="inv-sec" style="border-bottom:none">
+    <h3>⚙️ Прочие элементы (вручную)</h3>
+    <div class="inv-grid">
+      <div class="icard">
+        <label class="hd">Закладные детали (ЗД)</label>
+        <div class="irow"><label>Типов:</label><input type="number" id="zd_n" value="0" min="0"></div>
+        <div class="irow"><label>Маркировка:</label><input type="text" id="zd_nm" placeholder="ЗД-1…"></div>
+      </div>
+      <div class="icard">
+        <label class="hd">Деформационные швы</label>
+        <div class="irow"><label>Мест:</label><input type="number" id="ds_n" value="0" min="0"></div>
+        <div class="irow"><label>Описание:</label><input type="text" id="ds_nm" placeholder="Гр. Бл.7…"></div>
+      </div>
+      <div class="icard">
+        <label class="hd">Подземная часть / паркинг</label>
+        <div class="irow"><label>Уровней:</label><input type="number" id="ug_n" value="0" min="0"></div>
+        <div class="irow"><label>Описание:</label><input type="text" id="ug_nm" placeholder="Паркинг −1 эт."></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <button class="btn" onclick="goStep(0)">← Назад</button>
+    <button class="btn blue" onclick="refreshFromModel()">⟳ Обновить из модели</button>
+    <button class="btn next" onclick="goStep(2)">Далее: Проверка →</button>
+  </div>
+</div>
+</div>
+
+<!-- ══════════ ШАГ 3: ПРОВЕРКА ══════════ -->
+<div class="step" id="step2">
+<div class="card">
+  <div class="hdr"><h1>ПРОВЕРКА ЧЕРТЕЖЕЙ КЖ</h1><div class="sub" id="chk-sub">Шаг 3 — Проставьте статус каждого пункта</div></div>
+  <div class="toolbar">
+    <span>Действия:</span>
+    <button class="btn blue" onclick="checkAll('ok')">✓ Все ОК</button>
+    <button class="btn" onclick="checkAll('na')">— Все Н/П</button>
+    <button class="btn" onclick="resetAll()">↺ Сброс</button>
+    <button class="btn green" onclick="printReport()">🖨 Печать</button>
+    <button class="btn" onclick="exportXLSX()">↓ Excel</button>
+    <div class="stats">
+      <div class="stat"><div class="dot dok"></div><span class="sn" id="cnt-ok">0</span> ОК</div>
+      <div class="stat"><div class="dot dfail"></div><span class="sn" id="cnt-fail">0</span> Замечание</div>
+      <div class="stat"><div class="dot dna"></div><span class="sn" id="cnt-na">0</span> Н/П</div>
+      <div class="stat" style="color:var(--gx)"><span class="sn" id="cnt-open">0</span> ожидает</div>
+    </div>
+  </div>
+  <table class="ctable">
+    <thead><tr>
+      <th>Пункт проверки</th>
+      <th class="cc">Статус</th>
+      <th style="width:150px">Ответственный</th>
+      <th style="min-width:150px">Примечание</th>
+    </tr></thead>
+    <tbody id="chk-body"></tbody>
+  </table>
+  <div class="page-footer">
+    <button class="btn" onclick="goStep(1)">← Конструкции</button>
+    <div style="font-size:11px;color:var(--gx)">После проверки всех пунктов перейдите к итогу</div>
+    <button class="btn next" onclick="goStep(3)">Далее: Итог →</button>
+  </div>
+</div>
+</div>
+
+<!-- ══════════ ШАГ 4: ИТОГ ══════════ -->
+<div class="step" id="step3">
+<div class="card">
+  <div class="hdr"><h1>ИТОГ ПРОВЕРКИ</h1><div class="sub" id="sum-sub">Автоматическое резюме</div></div>
+  <div class="sum-wrap">
+
+    <div class="sh">Статистика</div>
+    <div class="big-stats">
+      <div class="bst ok"><div class="bn" id="s-ok">0</div><div class="bl">Соответствует (ОК)</div></div>
+      <div class="bst fail"><div class="bn" id="s-fail">0</div><div class="bl">Замечания</div></div>
+      <div class="bst na"><div class="bn" id="s-na">0</div><div class="bl">Не применимо</div></div>
+      <div class="bst pend"><div class="bn" id="s-open">0</div><div class="bl">Не проверено</div></div>
+    </div>
+    <div class="prog-bar"><div class="prog-fill" id="prog" style="width:0%"></div></div>
+    <div class="prog-lbl"><span>Прогресс</span><span id="prog-pct">0%</span></div>
+
+    <div class="sh" style="margin-top:8px">По разделам</div>
+    <table class="ctable" style="margin-bottom:16px">
+      <thead><tr>
+        <th>Раздел</th>
+        <th style="width:55px;text-align:center">ОК</th>
+        <th style="width:80px;text-align:center">Замечания</th>
+        <th style="width:55px;text-align:center">Н/П</th>
+        <th style="width:70px;text-align:center">Ожидает</th>
+      </tr></thead>
+      <tbody id="sec-bk"></tbody>
+    </table>
+
+    <div id="fail-wrap" style="display:none">
+      <div class="sh">Список замечаний</div>
+      <table class="ctable" style="margin-bottom:16px">
+        <thead><tr>
+          <th class="cn">№</th><th>Пункт</th><th style="width:150px">Ответственный</th><th style="width:200px">Примечание</th>
+        </tr></thead>
+        <tbody id="fail-body"></tbody>
+      </table>
+    </div>
+
+    <div class="sh" style="margin-top:8px">Заключение</div>
+
+    <div class="ir">
+      <div class="ir-lbl">Вердикт</div>
+      <div class="ir-val"><span class="verdict v-pend" id="verdict">Проверка не завершена</span></div>
+    </div>
+    <div class="ir">
+      <div class="ir-lbl">Критических замечаний (конструктивных)</div>
+      <div class="ir-val"><span class="auto-n fail" id="it-crit">0</span></div>
+    </div>
+    <div class="ir">
+      <div class="ir-lbl">Оформительских замечаний <span style="font-size:10px;font-weight:400;color:var(--gx)">(вручную)</span></div>
+      <div class="ir-val"><input type="number" id="it-cosm" min="0" value="0" style="width:80px"></div>
+    </div>
+    <div class="ir">
+      <div class="ir-lbl">Лист замечаний составлен и передан исполнителю</div>
+      <div class="ir-val">
+        <div class="sign-box" id="sent-box" onclick="toggleSign('sent')">
+          <div class="sbox" id="sent-ch"></div>
+          <span id="sent-txt">Нажмите для подтверждения</span>
+        </div>
+      </div>
+    </div>
+    <div class="ir">
+      <div class="ir-lbl">Дата повторной проверки после устранения замечаний</div>
+      <div class="ir-val"><input type="date" id="it-recheck"></div>
+    </div>
+    <div class="ir">
+      <div class="ir-lbl">Подпись ведущего специалиста</div>
+      <div class="ir-val" style="display:flex;flex-direction:column;gap:8px">
+        <input type="text" id="it-signname" placeholder="ФИО ведущего специалиста" style="max-width:260px">
+        <div class="sign-box" id="sign-box" onclick="toggleSign('sign')">
+          <div class="sbox" id="sign-ch"></div>
+          <span id="sign-txt">Подписать — подтвердить завершение проверки</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <div class="page-footer">
+    <button class="btn" onclick="goStep(2)">← К проверке</button>
+    <button class="btn blue" onclick="savePdf()">⬇ Сохранить PDF</button>
+    <button class="btn green" onclick="printReport()">🖨 Печать</button>
+    <button class="btn" onclick="exportXLSX()">↓ Excel</button>
+  </div>
+</div>
+</div>
+
+<div id="report"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════ ДАННЫЕ ══════════
+const MARK_TEMPLATE = [
+  "Смоделировано правильно",
+  "Опалубка оформлена",
+  "Армирование правильное",
+  "Армирование оформлено",
+  "Спецификация оформлена",
+];
+
+const SECTIONS = [
+  {k:'general', name:"ОБЩИЕ ДАННЫЕ И ОФОРМЛЕНИЕ", type:'general', items:[
+    "Титульный лист: наименование, шифр, стадия РП, альбом, подписи ГИП / ГАП / Директора",
+    "Ведомость рабочих чертежей: все листы пронумерованы, наименования совпадают с содержанием",
+    "Ведомость ссылочных и прилагаемых документов заполнена (СП, ГОСТ, ТКП)",
+    "Основные надписи на всех листах: шифр, ФИО, подписи, даты заполнены",
+    "Масштабы: планы — 1:100/1:200, узлы — 1:20/1:50",
+    "Шифры листов соответствуют ведомости (нет пропусков и дублей)",
+    "Лист ОД-1: класс бетона, класс арматуры, нагрузки, требования к бетонированию",
+  ]},
+  {k:'norms', name:"НОРМАТИВНАЯ БАЗА", type:'general', items:[
+    "СП 63.13330-2018 «Бетонные и железобетонные конструкции» — актуальная редакция",
+    "СП 20.13330-2017 «Нагрузки и воздействия»",
+    "ГОСТ 34028-2016 «Прокат арматурный» (Ѐ50С)",
+    "ГОСТ 14098-2014 «Соединения сварные арматуры»",
+    "СТ РК EN 206-2017 «Бетон» — казахстанская редакция",
+    "СП РК 5.01-102-2013 «Основы проектирования несущих конструкций»",
+    "СП 5.03-107-2013 «Несущие и ограждающие конструкции»",
+  ]},
+  {k:'od', name:"ЛИСТ ОБЩИХ ДАННЫХ", type:'general', items:[
+    "Класс бетона — раздельно для каждого типа конструкций",
+    "Класс арматуры: Ѐ50С — рабочая, А240 — конструктивная",
+    "Защитный слой: фундамент ≥40 мм, стены ≥20–30 мм, перекрытия ≥20 мм",
+    "Сейсмичность: балл указан (8 б. ОС-3), коэффициенты учтены",
+    "Требования к бетонированию при отрицательных температурах — отражены",
+    "Гидроизоляция подземных конструкций: бетон W6 + мастика 2 раза",
+    "Таблица деформационных характеристик грунта (модуль Е) заполнена",
+    "Требования к контролю качества бетона (испытание кубиков) — указаны",
+  ]},
+  {k:'found',  name:"ФУНДАМЕНТЫ",  type:'mark'},
+  {k:'walls',  name:"СТЕНЫ",       type:'mark'},
+  {k:'slabs',  name:"ПЕРЕКРЫТИЯ", type:'mark'},
+  {k:'cols',   name:"КОЛОННЫ",     type:'mark'},
+  {k:'beams',  name:"БАЛКИ",        type:'mark'},
+  {k:'stairs', name:"ЛЕСТНИЧНЫЕ МАРШИ И ПЛОЩАДКИ", type:'mark'},
+  {k:'nodes', name:"УЗЛЫ, ДЕТАЛИ, ЗАКЛАДНЫЕ", type:'general', items:[
+    "Узлы примыкания: масштаб ≥1:20, все размеры проставлены",
+    "Деформационные швы: зазор, армирование по обеим сторонам, вкладыши",
+    "Закладные детали: привязка к осям/отметкам, марка стали, размеры пластины и анкеров",
+    "Монтажные петли: класс А240, диаметр, длина",
+    "Узлы примыкания к соседним блокам: отметки и деф. шов согласованы",
+  ]},
+  {k:'revit', name:"СПЕЦИФИКА REVIT", type:'general', items:[
+    "Позиции арматуры — Revit-тег; нет дублирующих тегов с разными номерами",
+    "Масштаб видов совпадает с масштабом на распечатке",
+    "Размерные цепочки непрерывны, нет конфликта ручных и параметрических",
+    "Семейства арматуры актуальны: нет Ø0, нет серых непечатных элементов",
+    "Разрезы скоординированы с планами (нет ручных правок в разрезе)",
+    "Штамп через параметры проекта: нет незаполненных параметров",
+    "Спецификации экспортированы из модели, не набраны вручную",
+  ]},
+  {k:'coord', name:"УВЯЗКА СО СМЕЖНИКАМИ", type:'general', items:[
+    "Отметки перекрытий и фундаментов совпадают с АР/КР",
+    "Сечения колонн и стен соответствуют расчётной схеме (КР)",
+    "Проёмы под ОВ и ВК: размеры и отметки совпадают с листами ОВ/ВК",
+    "Гильзы под ЭО: расположение совпадает с листами ЭО",
+    "Нагрузки на перекрытия — согласно АР/КР",
+    "Оси в КЖ совпадают с АР: нумерация одинакова",
+  ]},
+];
+
+const SECTION_NAMES = {found:"Фундаменты", walls:"Стены", slabs:"Перекрытия", cols:"Колонны", beams:"Балки", stairs:"Лестничные марши и площадки"};
+const MARK_SEC_ORDER = ['found','walls','slabs','cols','beams','stairs'];
+
+let MARKS = {
+  walls: ["СНм-1","СНм-2","СНм-3","СНм-4","СНм-5","СШм-10"],
+  slabs: ["Пм-999"],
+};
+
+// ══════════ СОСТОЯНИЕ ══════════
+let RS = {};
+let RM = {};
+let NOTES = {};
+let RESP = {};
+let EDITS = {};
+let ROW_ORDER = [];
+let ROW_EL = {};
+let TOTAL = 0;
+let sentSigned = false, finalSigned = false;
+let CUSTOM_ROWS = []; // [{key, secK, text}] — пользовательские проверки проверяющего
+
+// ══════════ НАВИГАЦИЯ ══════════
+function goStep(n){
+  document.querySelectorAll('.step').forEach((el,i)=>el.classList.toggle('active', i===n));
+  document.querySelectorAll('.stab').forEach((el,i)=>el.classList.toggle('active', i===n));
+  if(n===1) renderInventory();
+  if(n===2) buildChecklist();
+  if(n===3) updateSummary();
+}
+
+// ══════════ ИСПОЛНИТЕЛИ ══════════
+function addExec(name){
+  const row=document.createElement('div'); row.className='pexec-row';
+  const inp=document.createElement('input'); inp.className='pexec-inp'; inp.placeholder='ФИО исполнителя'; inp.value=name||'';
+  const del=document.createElement('button'); del.type='button'; del.className='pexec-del'; del.title='Удалить'; del.textContent='✕';
+  del.onclick=()=>{ row.remove(); if(!document.querySelector('#pexec-list .pexec-row')) addExec(); };
+  row.appendChild(inp); row.appendChild(del);
+  document.getElementById('pexec-list').appendChild(row); return inp;
+}
+function getExecs(){ return Array.from(document.querySelectorAll('#pexec-list .pexec-inp')).map(i=>i.value.trim()).filter(v=>v); }
+function setExecs(arr){ const l=document.getElementById('pexec-list'); l.innerHTML=''; if(arr&&arr.length)arr.forEach(n=>addExec(n)); else addExec(); }
+
+// ══════════ ШАГ 2: СВОДКА ══════════
+function prefixOf(m){ const i=m.indexOf('-'); return (i>0? m.slice(0,i): m).trim(); }
+function numOf(m){ const i=m.indexOf('-'); const n=(i>0)? parseInt(m.slice(i+1),10):NaN; return isNaN(n)?0:n; }
+
+function renderInventory(){
+  const box=document.getElementById('inv-summary'); if(!box) return;
+  box.innerHTML=''; let any=false;
+  MARK_SEC_ORDER.forEach(k=>{
+    const marks=(MARKS[k]||[]).slice(); if(!marks.length) return; any=true;
+    const byPref={};
+    marks.forEach(m=>{ const p=prefixOf(m); (byPref[p]=byPref[p]||[]).push(m); });
+    const sec=document.createElement('div'); sec.className='inv-sec';
+    let html='<h3>'+SECTION_NAMES[k]+'</h3><div class="inv-grid">';
+    Object.keys(byPref).forEach(p=>{
+      const list=byPref[p].sort((a,b)=>numOf(a)-numOf(b));
+      const range=list.length===1? list[0] : (list[0]+' … '+list[list.length-1]);
+      html+='<div class="icard"><label class="hd">'+p+'</label>'
+          + '<div class="irow"><label>Типов:</label><b>'+list.length+'</b></div>'
+          + '<div class="irow"><label>Марки:</label><b>'+range+'</b></div></div>';
+    });
+    html+='</div>'; sec.innerHTML=html; box.appendChild(sec);
+  });
+  if(!any) box.innerHTML='<div class="inv-empty">В модели не найдено сборок с распознанными марками. Проверьте параметр «Комментарии» у сборок.</div>';
+}
+
+function mergeMarks(base, add){
+  const out={};
+  const secs=new Set([...Object.keys(base||{}), ...Object.keys(add||{})]);
+  secs.forEach(s=>{
+    const cur=(base&&base[s])||[], nw=(add&&add[s])||[];
+    const seen=new Set(cur), merged=cur.slice();
+    nw.forEach(m=>{ if(!seen.has(m)){ merged.push(m); seen.add(m); } });
+    merged.sort((a,b)=> prefixOf(a)===prefixOf(b)? numOf(a)-numOf(b) : prefixOf(a).localeCompare(prefixOf(b),'ru'));
+    out[s]=merged;
+  });
+  return out;
+}
+function applyMarks(marks, replace){
+  MARKS = replace ? (marks||{}) : mergeMarks(MARKS, marks||{});
+  renderInventory();
+  if(document.getElementById('step2').classList.contains('active')) buildChecklist();
+}
+window.applyMarks = applyMarks;
+function refreshFromModel(){
+  renderInventory();
+  showToast('Обновлено из модели');
+}
+
+// ══════════ ШАГ 3: ПОСТРОЕНИЕ ══════════
+function fillResp(sel, selected){
+  sel.innerHTML='';
+  const mk=(v,label)=>{ const o=document.createElement('option'); o.value=v; o.textContent=label; return o; };
+  sel.appendChild(mk('','— не назначен —'));
+  const execs=getExecs(); const has=new Set(execs);
+  execs.forEach(n=> sel.appendChild(mk(n,n)));
+  if(selected && !has.has(selected)) sel.appendChild(mk(selected, selected+' (нет в списке)'));
+  sel.value = selected || '';
+}
+
+// Общий ответственный по набору ключей: ФИО, если у всех один; иначе '' (разные/не назначен)
+function commonResp(keys){
+  let v;
+  for(const k of keys){
+    const r=RESP[k]||'';
+    if(v===undefined) v=r; else if(v!==r) return '';
+  }
+  return v||'';
+}
+
+function buildChecklist(){
+  const tbody=document.getElementById('chk-body');
+  tbody.innerHTML=''; ROW_ORDER=[]; ROW_EL={}; RM={};
+  let si=0;
+
+  SECTIONS.forEach(sec=>{
+    let subs=[];
+    if(sec.type==='general'){
+      subs.push({mark:null, items: sec.items.map((t,i)=>({key:sec.k+'#'+i, text:t}))});
+    } else {
+      const marks=(MARKS[sec.k]||[]);
+      if(!marks.length) return;
+      marks.forEach(m=> subs.push({mark:m, items: MARK_TEMPLATE.map((t,i)=>({key:m+'#'+i, text:t})) }));
+    }
+    if(!subs.length) return;
+
+    const secId='sec'+si;
+    const shead=document.createElement('tr');
+    shead.className='shdr'; shead.dataset.sec=secId;
+    shead.innerHTML='<td colspan="4">'+sec.name+'<span class="ico">▼</span></td>';
+    shead.onclick=function(){
+      this.classList.toggle('col');
+      const hide=this.classList.contains('col');
+      tbody.querySelectorAll('tr[data-secchild="'+secId+'"]').forEach(r=>r.style.display=hide?'none':'');
+    };
+    tbody.appendChild(shead);
+
+    subs.forEach((sg,mi)=>{
+      const markId=secId+'_m'+mi;
+      if(sg.mark){
+        const markKeys = sg.items.map(it=>it.key);
+        const mhead=document.createElement('tr');
+        mhead.className='mhdr'; mhead.dataset.secchild=secId; mhead.dataset.markhead=markId;
+        mhead.innerHTML='<td colspan="4">'
+          + '<span class="mk-badge">'+sg.mark+'</span>'
+          + '<span class="mk-resp">Ответственный: <select class="mrsel"></select></span>'
+          + '<span class="ico">▼</span></td>';
+        const msel=mhead.querySelector('.mrsel');
+        fillResp(msel, commonResp(markKeys));
+        const wrap=mhead.querySelector('.mk-resp');
+        wrap.onclick=(ev)=>ev.stopPropagation();
+        msel.onchange=(ev)=>{
+          ev.stopPropagation();
+          const who=msel.value;
+          markKeys.forEach(k=>{
+            if(who) RESP[k]=who; else delete RESP[k];
+            if(ROW_EL[k]){ const rs=ROW_EL[k].querySelector('.rsel'); if(rs) fillResp(rs, who); }
+          });
+        };
+        mhead.onclick=function(){
+          this.classList.toggle('col');
+          const hide=this.classList.contains('col');
+          tbody.querySelectorAll('tr[data-mark="'+markId+'"]').forEach(r=>r.style.display=hide?'none':'');
+        };
+        tbody.appendChild(mhead);
+      }
+      sg.items.forEach(it=>{
+        ROW_ORDER.push(it.key);
+        RM[it.key]={sec:sec.name, mark:sg.mark, text:it.text};
+        const key=it.key;
+        const tr=document.createElement('tr');
+        tr.className='crow'; tr.dataset.secchild=secId;
+        if(sg.mark) tr.dataset.mark=markId;
+        tr.innerHTML='<td><div class="edt" contenteditable="true"></div></td>'
+          + '<td class="cc"><div class="cg">'
+          +   '<button class="cb" title="ОК" data-v="ok">✓</button>'
+          +   '<button class="cb" title="Замечание" data-v="fail">✗</button>'
+          +   '<button class="cb" title="Н/П" data-v="na">—</button>'
+          + '</div></td>'
+          + '<td><select class="rsel"></select></td>'
+          + '<td><textarea class="noi" rows="1" placeholder="Примечание…"></textarea></td>';
+        const ed=tr.querySelector('.edt');
+        ed.textContent = (EDITS[key]!==undefined ? EDITS[key] : it.text);
+        ed.oninput=()=>{ EDITS[key]=ed.innerText; };
+        tr.querySelectorAll('.cb').forEach(b=> b.onclick=()=>setStatus(key,b.dataset.v));
+        const sel=tr.querySelector('.rsel');
+        fillResp(sel, RESP[key]);
+        sel.onchange=()=>{
+          if(sel.value) RESP[key]=sel.value; else delete RESP[key];
+          if(sg.mark){
+            const mh=tbody.querySelector('tr[data-markhead="'+markId+'"] .mrsel');
+            if(mh) fillResp(mh, commonResp(sg.items.map(it=>it.key)));
+          }
+        };
+        const ta=tr.querySelector('.noi');
+        ta.value = NOTES[key]||'';
+        const resize=()=>{ ta.style.height='auto'; ta.style.height=ta.scrollHeight+'px'; };
+        ta.oninput=()=>{ NOTES[key]=ta.value; resize(); };
+        ROW_EL[key]=tr;
+        tbody.appendChild(tr);
+        resize();
+        if(RS[key]) applyState(key);
+      });
+
+      // Пользовательские строки этой марки / раздела
+      const crFilter=sg.mark
+        ? (r=>r.secK===sec.k && r.mark===sg.mark)
+        : (r=>r.secK===sec.k && !r.mark);
+      CUSTOM_ROWS.filter(crFilter).forEach(cr=>{
+        const key=cr.key;
+        ROW_ORDER.push(key);
+        RM[key]={sec:sec.name, mark:sg.mark||null, text:cr.text||''};
+        const tr=document.createElement('tr');
+        tr.className='crow crow-custom'; tr.dataset.secchild=secId;
+        if(sg.mark) tr.dataset.mark=markId;
+        tr.innerHTML='<td><div class="edt" contenteditable="true"></div></td>'
+          +'<td class="cc"><div class="cg">'
+          +  '<button class="cb" title="ОК" data-v="ok">✓</button>'
+          +  '<button class="cb" title="Замечание" data-v="fail">✗</button>'
+          +  '<button class="cb" title="Н/П" data-v="na">—</button>'
+          +'</div></td>'
+          +'<td><select class="rsel"></select></td>'
+          +'<td><textarea class="noi" rows="1" placeholder="Примечание…"></textarea>'
+          +'<button class="btn-rm-custom" title="Удалить пункт" onclick="removeCustomRow(\''+key+'\')">×</button></td>';
+        const ed=tr.querySelector('.edt');
+        ed.textContent=cr.text||'';
+        ed.oninput=()=>{ cr.text=ed.innerText; };
+        tr.querySelectorAll('.cb').forEach(b=>b.onclick=()=>setStatus(key,b.dataset.v));
+        const sel=tr.querySelector('.rsel');
+        fillResp(sel, RESP[key]);
+        sel.onchange=()=>{ if(sel.value) RESP[key]=sel.value; else delete RESP[key]; };
+        const ta=tr.querySelector('.noi');
+        ta.value=NOTES[key]||'';
+        const rsz=()=>{ ta.style.height='auto'; ta.style.height=ta.scrollHeight+'px'; };
+        ta.oninput=()=>{ NOTES[key]=ta.value; rsz(); };
+        ROW_EL[key]=tr;
+        tbody.appendChild(tr);
+        rsz();
+        if(RS[key]) applyState(key);
+      });
+
+      // Кнопка «+» для этой марки/раздела (только проверяющему)
+      const addTr=document.createElement('tr');
+      addTr.className='crow-add'; addTr.dataset.secchild=secId;
+      if(sg.mark) addTr.dataset.mark=markId;
+      const mArg=sg.mark ? '\''+sg.mark+'\'' : 'null';
+      addTr.innerHTML='<td colspan="4"><button class="btn btn-add-custom" onclick="addCustomRow(\''+sec.k+'\','+mArg+')">+ Доп. проверка</button></td>';
+      tbody.appendChild(addTr);
+    });
+
+    si++;
+  });
+
+  TOTAL=ROW_ORDER.length;
+  document.getElementById('chk-sub').textContent =
+    document.getElementById('pcode').value+' · '+document.getElementById('pname').value;
+  updateStats();
+}
+
+// ══════════ ПОЛЬЗОВАТЕЛЬСКИЕ ПРОВЕРКИ ══════════
+function addCustomRow(secK, mark){
+  const key='cx_'+Date.now()+'_'+Math.random().toString(36).substr(2,5);
+  CUSTOM_ROWS.push({key, secK, mark:mark||null, text:''});
+  buildChecklist();
+  setTimeout(()=>{ const el=ROW_EL[key]; if(el) el.querySelector('.edt').focus(); },30);
+}
+function removeCustomRow(key){
+  CUSTOM_ROWS=CUSTOM_ROWS.filter(r=>r.key!==key);
+  delete RS[key]; delete RESP[key]; delete NOTES[key];
+  buildChecklist();
+}
+
+// ══════════ СТАТУС ══════════
+function setStatus(key,val){
+  if(RS[key]===val) delete RS[key]; else RS[key]=val;
+  applyState(key); updateStats();
+}
+function applyState(key){
+  const tr=ROW_EL[key]; if(!tr) return;
+  const v=RS[key];
+  tr.className='crow'+(v==='ok'?' rok':v==='fail'?' rfail':v==='na'?' rna':'');
+  tr.querySelectorAll('.cb').forEach(b=>{ b.classList.remove('aok','afail','ana'); if(b.dataset.v===v) b.classList.add('a'+v); });
+}
+function updateStats(){
+  let ok=0,fail=0,na=0;
+  ROW_ORDER.forEach(k=>{const v=RS[k]; if(v==='ok')ok++;else if(v==='fail')fail++;else if(v==='na')na++;});
+  const open=TOTAL-(ok+fail+na);
+  document.getElementById('cnt-ok').textContent=ok;
+  document.getElementById('cnt-fail').textContent=fail;
+  document.getElementById('cnt-na').textContent=na;
+  document.getElementById('cnt-open').textContent=open;
+  const pct=TOTAL?Math.round((ok+fail+na)/TOTAL*100):0;
+  document.getElementById('stab2').classList.toggle('done', TOTAL>0 && pct===100);
+}
+function checkAll(v){ ROW_ORDER.forEach(k=>{RS[k]=v;applyState(k);}); updateStats(); }
+function resetAll(){ ROW_ORDER.forEach(k=>{delete RS[k];applyState(k);}); updateStats(); }
+
+// ══════════ ИТОГ ══════════
+function updateSummary(){
+  let ok=0,fail=0,na=0;
+  ROW_ORDER.forEach(k=>{const v=RS[k]; if(v==='ok')ok++;else if(v==='fail')fail++;else if(v==='na')na++;});
+  const checked=ok+fail+na, open=TOTAL-checked;
+  const pct=TOTAL?Math.round(checked/TOTAL*100):0;
+
+  document.getElementById('s-ok').textContent=ok;
+  document.getElementById('s-fail').textContent=fail;
+  document.getElementById('s-na').textContent=na;
+  document.getElementById('s-open').textContent=open;
+  document.getElementById('prog').style.width=pct+'%';
+  document.getElementById('prog-pct').textContent=pct+'%';
+  document.getElementById('it-crit').textContent=fail;
+  document.getElementById('it-crit').className='auto-n '+(fail>0?'fail':'ok');
+
+  const vb=document.getElementById('verdict');
+  if(open>0){ vb.className='verdict v-pend'; vb.textContent='Проверка не завершена ('+open+' ожидает)'; }
+  else if(fail>0){ vb.className='verdict v-fail'; vb.textContent='Есть замечания — '+fail+' пункт(ов)'; }
+  else if(!checked){ vb.className='verdict v-pend'; vb.textContent='Проверка не начата'; }
+  else { vb.className='verdict v-pass'; vb.textContent='✓ Замечаний нет — можно подписывать'; }
+
+  const bk=document.getElementById('sec-bk'); bk.innerHTML='';
+  const order=[], agg={};
+  ROW_ORDER.forEach(k=>{
+    const sec=(RM[k]||{}).sec||'—';
+    if(!agg[sec]){ agg[sec]={ok:0,fail:0,na:0,op:0}; order.push(sec); }
+    const v=RS[k];
+    if(v==='ok')agg[sec].ok++; else if(v==='fail')agg[sec].fail++; else if(v==='na')agg[sec].na++; else agg[sec].op++;
+  });
+  order.forEach(sec=>{
+    const a=agg[sec];
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td style="font-size:12px">'+sec+'</td>'
+      + '<td class="bk-ok">'+(a.ok||'')+'</td>'
+      + '<td class="bk-fail">'+(a.fail?'⚠ '+a.fail:'')+'</td>'
+      + '<td class="bk-na">'+(a.na||'')+'</td>'
+      + '<td class="bk-op">'+(a.op||'')+'</td>';
+    bk.appendChild(tr);
+  });
+
+  const fb=document.getElementById('fail-body'); fb.innerHTML=''; let hasFail=false; let n=0;
+  ROW_ORDER.forEach(k=>{
+    if(RS[k]!=='fail') return;
+    hasFail=true; n++;
+    const m=RM[k]||{};
+    const label=(m.mark? m.mark+': ':'')+(m.text||'');
+    const note=(NOTES[k]!==undefined && NOTES[k]!=='')? NOTES[k] : (ROW_EL[k]? ROW_EL[k].querySelector('.noi').value : '');
+    const resp=RESP[k]||'';
+    const row=document.createElement('tr');
+    row.innerHTML='<td class="cn">'+n+'</td><td style="font-size:12px">'+label+'</td>'
+      + '<td style="font-size:12px">'+(resp||'<span style="color:var(--gx)">не назначен</span>')+'</td>'
+      + '<td style="font-size:12px;color:var(--rd)">'+(note||'—')+'</td>';
+    fb.appendChild(row);
+  });
+  document.getElementById('fail-wrap').style.display=hasFail?'':'none';
+
+  document.getElementById('stab3').classList.toggle('done', finalSigned);
+  document.getElementById('sum-sub').textContent =
+    document.getElementById('pcode').value+' · '+document.getElementById('pname').value;
+}
+
+// ══════════ ПОДПИСИ ══════════
+function applySigns(){
+  document.getElementById('sent-box').classList.toggle('signed', sentSigned);
+  document.getElementById('sent-ch').textContent = sentSigned?'✓':'';
+  document.getElementById('sent-txt').textContent= sentSigned?'Передан ✓':'Нажмите для подтверждения';
+  document.getElementById('sign-box').classList.toggle('signed', finalSigned);
+  document.getElementById('sign-ch').textContent = finalSigned?'✓':'';
+  document.getElementById('sign-txt').textContent= finalSigned?'Подписано ✓':'Подписать — подтвердить завершение проверки';
+  document.getElementById('stab3').classList.toggle('done', finalSigned);
+}
+function toggleSign(which){
+  if(which==='sent') sentSigned=!sentSigned; else finalSigned=!finalSigned;
+  applySigns();
+}
+
+// ══════════ МОСТ C# ↔ HTML ══════════
+const STATE_VERSION = 1;
+
+function collectState(){
+  return {
+    v: STATE_VERSION,
+    savedAt: new Date().toISOString(),
+    meta: {
+      pname: val('pname'), pcode: val('pcode'), pblock: val('pblock'),
+      porg:  val('porg'),  pstage:val('pstage'),plead:  val('plead'),
+      pdate: val('pdate'), psw:   val('psw'),   psheets:val('psheets'),
+      pexec: getExecs()
+    },
+    other: {
+      zd_n:val('zd_n'), zd_nm:val('zd_nm'),
+      ds_n:val('ds_n'), ds_nm:val('ds_nm'),
+      ug_n:val('ug_n'), ug_nm:val('ug_nm')
+    },
+    marks:  MARKS,
+    status: RS,
+    notes:  NOTES,
+    resp:   RESP,
+    edits:  EDITS,
+    sign:   { sent: sentSigned, final: finalSigned },
+    custom: CUSTOM_ROWS.map(r=>({key:r.key, secK:r.secK, text:r.text||''}))
+  };
+}
+function getStateJSON(){ return JSON.stringify(collectState()); }
+
+function loadState(data){
+  let o;
+  try { o = (typeof data==='string') ? JSON.parse(data||'{}') : (data||{}); }
+  catch(e){ console.error('loadState: некорректный JSON', e); return; }
+  if(!o || typeof o!=='object') return;
+
+  const m=o.meta||{};
+  ['pname','pcode','pblock','porg','pstage','plead','pdate','psw','psheets']
+    .forEach(id=>{ if(m[id]!==undefined) setVal(id, m[id]); });
+  setExecs(m.pexec||[]);
+
+  const ot=o.other||{};
+  ['zd_n','zd_nm','ds_n','ds_nm','ug_n','ug_nm']
+    .forEach(id=>{ if(ot[id]!==undefined) setVal(id, ot[id]); });
+
+  if(o.marks && typeof o.marks==='object') MARKS = o.marks;
+  RS    = o.status || {};
+  NOTES = o.notes  || {};
+  RESP  = o.resp   || {};
+  EDITS       = o.edits  || {};
+  CUSTOM_ROWS = Array.isArray(o.custom) ? o.custom : [];
+  sentSigned  = !!(o.sign && o.sign.sent);
+  finalSigned = !!(o.sign && o.sign.final);
+  applySigns();
+
+  renderInventory();
+  const steps=Array.from(document.querySelectorAll('.step'));
+  const idx=steps.findIndex(s=>s.classList.contains('active'));
+  if(idx===2) buildChecklist();
+  else if(idx===3){ buildChecklist(); updateSummary(); }
+}
+function loadStateJSON(s){ loadState(s); }
+
+// Вызывается из C#. role = 'reviewer' | 'executor'
+function setRole(role){
+  document.body.dataset.role = role;
+  const badge = document.getElementById('role-badge');
+  if(badge){
+    badge.textContent  = role === 'reviewer' ? '👤 Проверяющий' : '👤 Исполнитель';
+    badge.className    = 'role-badge ' + (role === 'reviewer' ? 'role-reviewer' : 'role-executor');
+    badge.style.display = '';
+  }
+}
+
+function val(id){ const e=document.getElementById(id); return e? e.value : ''; }
+function setVal(id,v){ const e=document.getElementById(id); if(e) e.value=(v==null?'':v); }
+
+// ══════════ ПРОТОКОЛ (печать / PDF) ══════════
+function escHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function statusText(v){ return v==='ok'?'ОК':v==='fail'?'Замечание':v==='na'?'Н/П':'Ожидает'; }
+function statusCls(v){ return v==='ok'?'st-ok':v==='fail'?'st-fail':v==='na'?'st-na':'st-open'; }
+function repRow(label,val){ return '<div><b>'+escHtml(label)+':</b> '+escHtml(val||'—')+'</div>'; }
+
+function enumRows(){
+  const rows=[];
+  SECTIONS.forEach(sec=>{
+    if(sec.type==='general'){
+      sec.items.forEach((t,i)=>{ const key=sec.k+'#'+i; rows.push({key, secName:sec.name, mark:null, text:(EDITS[key]!==undefined?EDITS[key]:t)}); });
+      CUSTOM_ROWS.filter(r=>r.secK===sec.k&&!r.mark).forEach(cr=>{
+        rows.push({key:cr.key, secName:sec.name, mark:null, text:cr.text||''});
+      });
+    } else {
+      (MARKS[sec.k]||[]).forEach(m=>{
+        MARK_TEMPLATE.forEach((t,i)=>{ const key=m+'#'+i; rows.push({key, secName:sec.name, mark:m, text:(EDITS[key]!==undefined?EDITS[key]:t)}); });
+        CUSTOM_ROWS.filter(r=>r.secK===sec.k&&r.mark===m).forEach(cr=>{
+          rows.push({key:cr.key, secName:sec.name, mark:m, text:cr.text||''});
+        });
+      });
+    }
+  });
+  return rows;
+}
+
+function buildReport(){
+  const g=id=>{ const e=document.getElementById(id); return e? e.value:''; };
+  const rows=enumRows();
+  let ok=0,fail=0,na=0;
+  rows.forEach(r=>{ const v=RS[r.key]; if(v==='ok')ok++; else if(v==='fail')fail++; else if(v==='na')na++; });
+  const total=rows.length, checked=ok+fail+na, open=total-checked;
+  const pct= total? Math.round(checked/total*100):0;
+
+  let vCls,vTxt;
+  if(open>0){ vCls='rv-pend'; vTxt='ПРОВЕРКА НЕ ЗАВЕРШЕНА — осталось '+open; }
+  else if(fail>0){ vCls='rv-fail'; vTxt='ЕСТЬ ЗАМЕЧАНИЯ — '+fail; }
+  else if(!checked){ vCls='rv-pend'; vTxt='ПРОВЕРКА НЕ НАЧАТА'; }
+  else { vCls='rv-pass'; vTxt='ЗАМЕЧАНИЙ НЕТ'; }
+
+  let h='';
+  h+='<div class="rep-head"><h1>ПРОТОКОЛ ПРОВЕРКИ ЧЕРТЕЖЕЙ КЖ</h1>'
+    + '<div class="rep-proj">'+escHtml(g('pname'))+'</div>'
+    + '<div class="rep-projsub">Шифр: '+escHtml(g('pcode'))+' &nbsp;·&nbsp; '+escHtml(g('pblock'))
+    + ' &nbsp;·&nbsp; Стадия: '+escHtml(g('pstage'))+'</div></div>';
+
+  h+='<div class="rep-meta">'
+    + repRow('Организация', g('porg'))
+    + repRow('Дата проверки', g('pdate'))
+    + repRow('Ведущий специалист', g('plead'))
+    + repRow('Листов КЖ', g('psheets'))
+    + repRow('ПО выпуска', g('psw'))
+    + repRow('Исполнители', getExecs().join(', '))
+    + '</div>';
+
+  h+='<div class="rep-verdict '+vCls+'">'+vTxt+' &nbsp;·&nbsp; выполнено '+pct+'%</div>'
+    + '<div class="rep-counts">'
+    + '<span class="rc-ok">ОК: '+ok+'</span>'
+    + '<span class="rc-fail">Замечания: '+fail+'</span>'
+    + '<span class="rc-na">Н/П: '+na+'</span>'
+    + '<span class="rc-open">Ожидает: '+open+'</span></div>';
+
+  const fails=rows.filter(r=>RS[r.key]==='fail');
+  h+='<div class="rep-secttl">ЗАМЕЧАНИЯ ('+fails.length+')</div>';
+  if(!fails.length){
+    h+='<div class="rep-none">Замечаний нет.</div>';
+  } else {
+    const groups={}, order=[];
+    fails.forEach(r=>{
+      const who=RESP[r.key] ? RESP[r.key] : '__none__';
+      if(!groups[who]){ groups[who]=[]; order.push(who); }
+      groups[who].push(r);
+    });
+    order.sort((a,b)=> a==='__none__'?1 : b==='__none__'?-1 : a.localeCompare(b,'ru'));
+    order.forEach(who=>{
+      const list=groups[who];
+      const title = who==='__none__' ? 'Ответственный не назначен' : 'Ответственный: '+escHtml(who);
+      h+='<div class="rep-resp">'+title+' <span class="rep-resp-n">('+list.length+')</span></div>';
+      h+='<table class="rep-tbl"><thead><tr><th>Раздел</th>'
+        + '<th style="width:70px">Марка</th><th>Пункт</th>'
+        + '<th style="width:170px">Примечание</th></tr></thead><tbody>';
+      list.forEach(r=>{
+        h+='<tr><td>'+escHtml(r.secName)+'</td><td>'+escHtml(r.mark||'—')+'</td>'
+          + '<td>'+escHtml(r.text)+'</td><td>'+escHtml(NOTES[r.key]||'')+'</td></tr>';
+      });
+      h+='</tbody></table>';
+    });
+  }
+
+  h+='<div class="rep-full"><div class="rep-secttl">ПОЛНЫЙ ЧЕК-ЛИСТ</div>'
+    + '<table class="rep-tbl"><thead><tr><th>Пункт</th>'
+    + '<th style="width:78px">Статус</th><th style="width:105px">Ответственный</th>'
+    + '<th style="width:140px">Примечание</th></tr></thead><tbody>';
+  let curSec=null, curMark=null;
+  rows.forEach(r=>{
+    if(r.secName!==curSec){ curSec=r.secName; curMark=null; h+='<tr class="rep-mk"><td colspan="4">'+escHtml(curSec)+'</td></tr>'; }
+    if(r.mark && r.mark!==curMark){ curMark=r.mark; h+='<tr class="rep-mk"><td colspan="4" style="padding-left:18px">Марка '+escHtml(r.mark)+'</td></tr>'; }
+    const v=RS[r.key];
+    h+='<tr><td>'+escHtml(r.text)+'</td>'
+      + '<td class="'+statusCls(v)+'">'+statusText(v)+'</td>'
+      + '<td>'+escHtml(RESP[r.key]||'')+'</td><td>'+escHtml(NOTES[r.key]||'')+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+
+  h+='<div class="rep-sign">'
+    + '<div>Проверку провёл:<div class="sl">'+escHtml(g('plead')||'')+'</div></div>'
+    + '<div>Передан на исправление:<div class="sl">'+(sentSigned?'да, '+escHtml(g('pdate')):'')+'</div></div>'
+    + '<div>Подпись / дата:<div class="sl">'+(finalSigned?'подписано '+escHtml(g('pdate')):'')+'</div></div>'
+    + '</div>';
+
+  document.getElementById('report').innerHTML=h;
+}
+
+function printReport(){ buildReport(); setTimeout(()=>window.print(), 60); }
+
+function savePdf(){
+  buildReport();
+  if(window.chrome && window.chrome.webview){ window.chrome.webview.postMessage('save-pdf'); }
+  else { setTimeout(()=>window.print(), 60); }
+}
+
+// ══════════ EXCEL EXPORT ══════════
+function exportXLSX(){
+  const secOrder=[],secFails={},secSeen={};
+  ROW_ORDER.forEach(k=>{
+    const sec=(RM[k]||{}).sec||'—';
+    if(!secSeen[sec]){secSeen[sec]=1;secOrder.push(sec);secFails[sec]=0;}
+    if(RS[k]==='fail') secFails[sec]++;
+  });
+  const chartSecs=secOrder.filter(s=>secFails[s]>0);
+  const hasChart=chartSecs.length>0;
+
+  const ssi={},ss=[];
+  function si(s){const v=s==null?'':String(s);if(ssi[v]===undefined){ssi[v]=ss.length;ss.push(v);}return ssi[v];}
+
+  const COLS=['A','B','C','D','E','F','G'];
+  const hdrs=['№','Раздел','Марка','Пункт','Статус','Ответственный','Примечание'];
+  hdrs.forEach(h=>si(h)); si('Раздел'); si('Замечания');
+
+  const rowData=enumRows().map((r,idx)=>{
+    const tr=ROW_EL[r.key];
+    const text=tr?tr.querySelector('.edt').innerText:r.text;
+    const note=tr?tr.querySelector('.noi').value:(NOTES[r.key]||'');
+    const v=RS[r.key];
+    const st=v==='ok'?'ОК':v==='fail'?'Замечание':v==='na'?'Н/П':'Ожидает';
+    si(r.secName||'');si(r.mark||'');si(text);si(st);si(RESP[r.key]||'');si(note);
+    return{n:idx+1,sec:r.secName||'',mark:r.mark||'',text,st,resp:RESP[r.key]||'',note};
+  });
+  chartSecs.forEach(s=>si(s));
+
+  function cS(c,r,i){return`<c r="${c}${r}" t="s"><v>${i}</v></c>`;}
+  function cN(c,r,v){return`<c r="${c}${r}"><v>${v}</v></c>`;}
+
+  let s1=`<row r="1">${hdrs.map((h,i)=>cS(COLS[i],1,si(h))).join('')}</row>`;
+  rowData.forEach((r,i)=>{const rn=i+2;s1+=`<row r="${rn}">${cN('A',rn,r.n)}${cS('B',rn,si(r.sec))}${cS('C',rn,si(r.mark))}${cS('D',rn,si(r.text))}${cS('E',rn,si(r.st))}${cS('F',rn,si(r.resp))}${cS('G',rn,si(r.note))}</row>`;});
+  const sheet1=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView tabSelected="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<cols><col min="1" max="1" width="5" customWidth="1"/><col min="2" max="2" width="28" customWidth="1"/><col min="3" max="3" width="14" customWidth="1"/><col min="4" max="4" width="55" customWidth="1"/><col min="5" max="5" width="12" customWidth="1"/><col min="6" max="6" width="26" customWidth="1"/><col min="7" max="7" width="32" customWidth="1"/></cols>
+<sheetData>${s1}</sheetData>
+</worksheet>`;
+
+  let s2=`<row r="1">${cS('A',1,si('Раздел'))}${cS('B',1,si('Замечания'))}</row>`;
+  chartSecs.forEach((s,i)=>{const rn=i+2;s2+=`<row r="${rn}">${cS('A',rn,si(s))}${cN('B',rn,secFails[s])}</row>`;});
+  const sheet2=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"${hasChart?' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"':''}>
+<cols><col min="1" max="1" width="40" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/></cols>
+<sheetData>${s2}</sheetData>
+${hasChart?'<drawing r:id="rId1"/>':''}
+</worksheet>`;
+
+  const nLast=chartSecs.length+1;
+  const totalFails=chartSecs.reduce((s,k)=>s+secFails[k],0);
+  const chart1=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<c:chart>
+<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Замечания по разделам (всего: ${totalFails})</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>
+<c:autoTitleDeleted val="0"/>
+<c:plotArea><c:pieChart><c:varyColors val="1"/>
+<c:ser><c:idx val="0"/><c:order val="0"/>
+<c:dLbls>
+<c:showLegendKey val="0"/>
+<c:showVal val="1"/>
+<c:showCatName val="1"/>
+<c:showSerName val="0"/>
+<c:showPercent val="0"/>
+<c:showBubbleSize val="0"/>
+<c:separator>: </c:separator>
+</c:dLbls>
+<c:cat><c:strRef><c:f>Итог!$A$2:$A$${nLast}</c:f></c:strRef></c:cat>
+<c:val><c:numRef><c:f>Итог!$B$2:$B$${nLast}</c:f></c:numRef></c:val>
+</c:ser><c:firstSliceAng val="0"/></c:pieChart></c:plotArea>
+<c:legend><c:legendPos val="r"/></c:legend>
+<c:plotVisOnly val="1"/>
+</c:chart></c:chartSpace>`;
+
+  const drawing1=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+<xdr:twoCellAnchor moveWithCells="1" sizeWithCells="1">
+<xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+<xdr:to><xdr:col>14</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>22</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr>
+<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>
+<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic>
+</xdr:graphicFrame><xdr:clientData/>
+</xdr:twoCellAnchor></xdr:wsDr>`;
+
+  const sst=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${ss.length}" uniqueCount="${ss.length}">
+${ss.map(s=>`<si><t xml:space="preserve">${xe(s)}</t></si>`).join('\n')}
+</sst>`;
+
+  const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+</styleSheet>`;
+
+  const wb=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Чеклист" sheetId="1" r:id="rId1"/><sheet name="Итог" sheetId="2" r:id="rId2"/></sheets>
+</workbook>`;
+  const rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+  const wbRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+  const sh2Rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`;
+  const drwRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>`;
+  const ct=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${hasChart?'<Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>\n<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>':''}
+<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
+  const entries=[
+    {path:'[Content_Types].xml',data:ct},
+    {path:'_rels/.rels',data:rels},
+    {path:'xl/workbook.xml',data:wb},
+    {path:'xl/_rels/workbook.xml.rels',data:wbRels},
+    {path:'xl/worksheets/sheet1.xml',data:sheet1},
+    {path:'xl/worksheets/sheet2.xml',data:sheet2},
+  ];
+  if(hasChart){
+    entries.push(
+      {path:'xl/worksheets/_rels/sheet2.xml.rels',data:sh2Rels},
+      {path:'xl/charts/chart1.xml',data:chart1},
+      {path:'xl/drawings/drawing1.xml',data:drawing1},
+      {path:'xl/drawings/_rels/drawing1.xml.rels',data:drwRels}
+    );
+  }
+  entries.push({path:'xl/sharedStrings.xml',data:sst},{path:'xl/styles.xml',data:styles});
+
+  const zipBuf=makeZip(entries);
+  const blob=new Blob([zipBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='Чеклист_КЖ_'+(val('pcode')||'').replace(/[^a-zA-Zа-яёА-ЯЁ0-9_-]/g,'_')+'.xlsx';
+  a.click();
+  showToast('Excel сохранён');
+}
+
+function xe(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function makeZip(entries){
+  const enc=new TextEncoder();
+  const files=entries.map(e=>({
+    name:enc.encode(e.path),
+    data:typeof e.data==='string'?enc.encode(e.data):e.data
+  }));
+  const T=new Uint32Array(256);
+  for(let i=0;i<256;i++){let c=i;for(let j=0;j<8;j++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);T[i]=c;}
+  function crc(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=T[(c^b[i])&0xFF]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}
+  function u16(v){return[v&0xFF,(v>>>8)&0xFF];}
+  function u32(v){return[v&0xFF,(v>>>8)&0xFF,(v>>>16)&0xFF,(v>>>24)&0xFF];}
+  const parts=[],cds=[];let off=0;
+  for(const f of files){
+    const cr=crc(f.data);
+    const lh=new Uint8Array([0x50,0x4B,0x03,0x04,20,0,0,0,0,0,0,0,0,0,...u32(cr),...u32(f.data.length),...u32(f.data.length),...u16(f.name.length),0,0]);
+    cds.push({name:f.name,cr,size:f.data.length,off});
+    parts.push(lh,f.name,f.data);
+    off+=lh.length+f.name.length+f.data.length;
+  }
+  const cdStart=off,cdParts=[];
+  for(const c of cds){
+    const ch=new Uint8Array([0x50,0x4B,0x01,0x02,20,0,20,0,0,0,0,0,0,0,0,0,...u32(c.cr),...u32(c.size),...u32(c.size),...u16(c.name.length),0,0,0,0,0,0,0,0,0,0,0,0,...u32(c.off)]);
+    cdParts.push(ch,c.name);
+  }
+  const cdSize=cdParts.reduce((s,p)=>s+p.length,0);
+  const eocd=new Uint8Array([0x50,0x4B,0x05,0x06,0,0,0,0,...u16(cds.length),...u16(cds.length),...u32(cdSize),...u32(cdStart),0,0]);
+  const all=[...parts,...cdParts,eocd];
+  const total=all.reduce((s,p)=>s+p.length,0);
+  const out=new Uint8Array(total);let pos=0;
+  for(const p of all){out.set(p,pos);pos+=p.length;}
+  return out;
+}
+
+function showToast(m){
+  const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+// ══════════ INIT ══════════
+addExec();
+document.getElementById('pdate').valueAsDate = new Date();
+</script>
+</body>
+</html>
