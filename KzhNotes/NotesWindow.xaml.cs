@@ -1,6 +1,6 @@
-﻿// NotesWindow.xaml.cs
-// РќРµРјРѕРґР°Р»СЊРЅРѕРµ РѕРєРЅРѕ: СЂР°Р±РѕС‚Р°РµС‚ СЃРѕ РЎРќРРњРљРћРњ Р»РёСЃС‚РѕРІ (Р±РµР· Revit API РІ UI-РїРѕС‚РѕРєРµ).
-// Р›СЋР±РѕРµ РѕР±СЂР°С‰РµРЅРёРµ Рє РјРѕРґРµР»Рё вЂ” С‚РѕР»СЊРєРѕ С‡РµСЂРµР· RevitEventBridge.Run(...).
+// NotesWindow.xaml.cs
+// Немодальное окно: работает со СНИМКОМ листов (без Revit API в UI-потоке).
+// Любое обращение к модели — только через RevitEventBridge.Run(...).
 
 using System;
 using System.Collections.Generic;
@@ -11,11 +11,11 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.Revit.DB;
-// using Autodesk.Revit.UI; -- removed: TextBox/Visibility conflict; UIDocument used via var only
+// using Autodesk.Revit.UI; -- убрано: конфликт TextBox/Visibility; UIDocument используется только через var
 
 namespace KzhNotes
 {
-    /// <summary>РћР±С‘СЂС‚РєР° Р±РёР±Р»РёРѕС‚РµС‡РЅРѕРіРѕ РїСѓРЅРєС‚Р° РґР»СЏ СЃРїРёСЃРєР° (СЃ РїСЂРµРІСЊСЋ Рё РїРѕРјРµС‚РєРѕР№ РЅРµРІС‹С‡РёС‚Р°РЅРЅС‹С… СЃСЃС‹Р»РѕРє).</summary>
+    /// <summary>Обёртка библиотечного пункта для списка (с превью и пометкой невычитанных ссылок).</summary>
     public sealed class LibVM
     {
         public PunktDef Def { get; }
@@ -28,7 +28,7 @@ namespace KzhNotes
         }
     }
 
-    /// <summary>Р­РєР·РµРјРїР»СЏСЂ РїСѓРЅРєС‚Р° РІ СЃРѕСЃС‚Р°РІРµ Р»РёСЃС‚Р° (РґР»СЏ РїСЂР°РІРѕРіРѕ СЃРїРёСЃРєР°).</summary>
+    /// <summary>Экземпляр пункта в составе листа (для правого списка).</summary>
     public sealed class ItemVM
     {
         public PunktDef Def { get; }
@@ -45,8 +45,8 @@ namespace KzhNotes
         private readonly RevitEventBridge _bridge;
 
         private List<SheetInfo> _snapshot = new List<SheetInfo>();
-        private List<SheetInfo> _selInfos = new List<SheetInfo>();   // SheetInfo РІС‹Р±СЂР°РЅРЅС‹С… Р»РёСЃС‚РѕРІ
-        private List<int> _selIds = new List<int>();                 // ElementId.IntegerValue РІС‹Р±СЂР°РЅРЅС‹С… Р»РёСЃС‚РѕРІ
+        private List<SheetInfo> _selInfos = new List<SheetInfo>();   // SheetInfo выбранных листов
+        private List<int> _selIds = new List<int>();                 // ElementId.IntegerValue выбранных листов
 
         private readonly ObservableCollection<ItemVM> _items = new ObservableCollection<ItemVM>();
         private List<NoteSet> _sets = new List<NoteSet>();
@@ -67,8 +67,8 @@ namespace KzhNotes
 
             lstSelected.ItemsSource = _items;
 
-            // С„РёР»СЊС‚СЂ РїРѕ РіСЂСѓРїРїР°Рј
-            var groups = new List<string> { "(РІСЃРµ)" };
+            // фильтр по группам
+            var groups = new List<string> { "(все)" };
             groups.AddRange(NotesLibrary.Groups().OrderBy(g => g));
             cboGroup.ItemsSource = groups;
             cboGroup.SelectedIndex = 0;
@@ -78,7 +78,7 @@ namespace KzhNotes
             UpdateModeUi();
         }
 
-        // ---------- Р±РёР±Р»РёРѕС‚РµРєР° ----------
+        // ---------- библиотека ----------
         private void Filter_Changed(object sender, EventArgs e) { RefreshLibrary(); }
 
         private void RefreshLibrary()
@@ -88,7 +88,7 @@ namespace KzhNotes
             string q = (txtSearch.Text ?? "").Trim().ToLowerInvariant();
 
             IEnumerable<PunktDef> src = NotesLibrary.Punkts;
-            if (!string.IsNullOrEmpty(grp) && grp != "(РІСЃРµ)")
+            if (!string.IsNullOrEmpty(grp) && grp != "(все)")
                 src = src.Where(p => p.Group == grp);
             if (q.Length > 0)
                 src = src.Where(p => (p.Body ?? "").ToLowerInvariant().Contains(q)
@@ -97,7 +97,7 @@ namespace KzhNotes
             lstLibrary.ItemsSource = src.Select(p => new LibVM(p)).ToList();
         }
 
-        // ---------- РґРѕР±Р°РІР»РµРЅРёРµ / СѓРґР°Р»РµРЅРёРµ / РїРѕСЂСЏРґРѕРє ----------
+        // ---------- добавление / удаление / порядок ----------
         private void btnAdd_Click(object sender, RoutedEventArgs e)
         {
             var lib = lstLibrary.SelectedItem as LibVM;
@@ -131,7 +131,7 @@ namespace KzhNotes
             RefreshPreview();
         }
 
-        // ---------- РїРѕР»СЏ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїСѓРЅРєС‚Р° ----------
+        // ---------- поля выбранного пункта ----------
         private void lstSelected_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             BuildFieldsPanel(lstSelected.SelectedItem as ItemVM);
@@ -144,7 +144,7 @@ namespace KzhNotes
             {
                 pnlFields.Children.Add(new TextBlock
                 {
-                    Text = "вЂ” Сѓ РїСѓРЅРєС‚Р° РЅРµС‚ СЂРµРґР°РєС‚РёСЂСѓРµРјС‹С… РїРѕР»РµР№ вЂ”",
+                    Text = "— у пункта нет редактируемых полей —",
                     Foreground = System.Windows.Media.Brushes.Gray
                 });
                 return;
@@ -169,12 +169,12 @@ namespace KzhNotes
             }
         }
 
-        // ---------- РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ (РґР»СЏ РїРµСЂРІРѕРіРѕ РІС‹Р±СЂР°РЅРЅРѕРіРѕ Р»РёСЃС‚Р°) ----------
+        // ---------- предпросмотр (для первого выбранного листа) ----------
         private void RefreshPreview()
         {
             if (_selInfos.Count == 0)
             {
-                txtPreview.Text = "(Р»РёСЃС‚ РЅРµ РІС‹Р±СЂР°РЅ вЂ” РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РЅРµРґРѕСЃС‚СѓРїРµРЅ)";
+                txtPreview.Text = "(лист не выбран — предпросмотр недоступен)";
                 txtWarnings.Text = "";
                 return;
             }
@@ -183,21 +183,21 @@ namespace KzhNotes
             var res = engine.Build(cur, _items.Select(v => v.Item).ToList());
             txtPreview.Text = res.Text;
             txtWarnings.Text = res.Warnings.Count > 0
-                ? "вљ  " + string.Join("   |   ", res.Warnings)
+                ? "⚠ " + string.Join("   |   ", res.Warnings)
                 : "";
         }
 
-        // ---------- СЂРµР¶РёРј (РѕРґРёРЅ Р»РёСЃС‚ / РЅРµСЃРєРѕР»СЊРєРѕ) ----------
+        // ---------- режим (один лист / несколько) ----------
         private void UpdateModeUi()
         {
             int n = _selIds.Count;
             if (n == 0)
-                lblSheets.Text = "Р›РёСЃС‚С‹ РЅРµ РІС‹Р±СЂР°РЅС‹ вЂ” РІС‹РґРµР»РёС‚Рµ Р»РёСЃС‚(С‹) Рё РЅР°Р¶РјРёС‚Рµ В«РћР±РЅРѕРІРёС‚СЊ РІС‹Р±РѕСЂВ».";
+                lblSheets.Text = "Листы не выбраны — выделите лист(ы) и нажмите «Обновить выбор».";
             else if (n == 1)
-                lblSheets.Text = "Р›РёСЃС‚: " + _selInfos[0].Number + " вЂ” " + _selInfos[0].Name +
-                                 "   |   РњР°СЂРєР°: " + (_selInfos[0].Mark ?? "вЂ”");
+                lblSheets.Text = "Лист: " + _selInfos[0].Number + " — " + _selInfos[0].Name +
+                                 "   |   Марка: " + (_selInfos[0].Mark ?? "—");
             else
-                lblSheets.Text = "Р’С‹Р±СЂР°РЅРѕ Р»РёСЃС‚РѕРІ: " + n + " вЂ” СЂРµР¶РёРј РїСЂРёРјРµРЅРµРЅРёСЏ РЅР°Р±РѕСЂР° (РїСЂР°РІРєР° РїСѓРЅРєС‚РѕРІ РЅРµРґРѕСЃС‚СѓРїРЅР°).";
+                lblSheets.Text = "Выбрано листов: " + n + " — режим применения набора (правка пунктов недоступна).";
 
             bool single = n == 1;
             btnWrite.IsEnabled = single;
@@ -207,7 +207,7 @@ namespace KzhNotes
             btnSaveSet.IsEnabled = single;
         }
 
-        // ---------- РЅР°Р±РѕСЂС‹ ----------
+        // ---------- наборы ----------
         private void LoadSets()
         {
             _sets = NoteSetStore.Load(SetsPath);
@@ -218,8 +218,8 @@ namespace KzhNotes
         private void btnSaveSet_Click(object sender, RoutedEventArgs e)
         {
             string name = (txtSetName.Text ?? "").Trim();
-            if (name.Length == 0) { MessageBox.Show("Р’РІРµРґРёС‚Рµ РёРјСЏ РЅР°Р±РѕСЂР°."); return; }
-            if (_items.Count == 0) { MessageBox.Show("РЎРѕСЃС‚Р°РІ РїСѓСЃС‚."); return; }
+            if (name.Length == 0) { MessageBox.Show("Введите имя набора."); return; }
+            if (_items.Count == 0) { MessageBox.Show("Состав пуст."); return; }
 
             var set = new NoteSet { Name = name };
             foreach (var vm in _items)
@@ -234,17 +234,17 @@ namespace KzhNotes
             NoteSetStore.Save(SetsPath, _sets);
             cboSets.ItemsSource = null; cboSets.ItemsSource = _sets;
             cboSets.SelectedItem = set;
-            MessageBox.Show("РќР°Р±РѕСЂ В«" + name + "В» СЃРѕС…СЂР°РЅС‘РЅ.");
+            MessageBox.Show("Набор «" + name + "» сохранён.");
         }
 
         private void btnApplySet_Click(object sender, RoutedEventArgs e)
         {
             var set = cboSets.SelectedItem as NoteSet;
-            if (set == null) { MessageBox.Show("Р’С‹Р±РµСЂРёС‚Рµ РЅР°Р±РѕСЂ."); return; }
+            if (set == null) { MessageBox.Show("Выберите набор."); return; }
 
             if (_selIds.Count <= 1)
             {
-                // РѕРґРёРЅ Р»РёСЃС‚: Р·Р°РіСЂСѓР¶Р°РµРј РЅР°Р±РѕСЂ РІ СЂРµРґР°РєС‚РѕСЂ (РјРѕР¶РЅРѕ РґРѕРїСЂР°РІРёС‚СЊ Рё Р·Р°РїРёСЃР°С‚СЊ)
+                // один лист: загружаем набор в редактор (можно доправить и записать)
                 _items.Clear();
                 foreach (var it in set.Items)
                 {
@@ -258,7 +258,7 @@ namespace KzhNotes
             }
             else
             {
-                // РЅРµСЃРєРѕР»СЊРєРѕ Р»РёСЃС‚РѕРІ: РїСЂРёРјРµРЅСЏРµРј СЃСЂР°Р·Сѓ Рє РІС‹Р±СЂР°РЅРЅС‹Рј (РєР°Р¶РґС‹Р№ РїРµСЂРµСЃС‡РёС‚Р°РµС‚ СЃСЃС‹Р»РєРё)
+                // несколько листов: применяем сразу к выбранным (каждый пересчитает ссылки)
                 var ids = _selIds.ToList();
                 var snap = _snapshot;
                 _bridge.Run(app =>
@@ -267,14 +267,14 @@ namespace KzhNotes
                     var sheets = ids.Select(id => doc.GetElement(new ElementId(id)) as ViewSheet)
                                     .Where(s => s != null).ToList();
                     var rep = NotesAppService.ApplySetToSheets(doc, sheets, set, snap);
-                    Dispatcher.Invoke(() => ShowReport(rep, "РџСЂРёРјРµРЅС‘РЅ РЅР°Р±РѕСЂ В«" + set.Name + "В»"));
+                    Dispatcher.Invoke(() => ShowReport(rep, "Применён набор «" + set.Name + "»"));
                 });
             }
         }
 
-        // ---------- РѕРїРµСЂР°С†РёРё СЃ РјРѕРґРµР»СЊСЋ (С‡РµСЂРµР· РјРѕСЃС‚) ----------
+        // ---------- операции с моделью (через мост) ----------
 
-        /// <summary>РџСЂРѕС‡РёС‚Р°С‚СЊ РІС‹РґРµР»РµРЅРёРµ Рё СЃРЅРёРјРѕРє РёР· Revit Рё РѕР±РЅРѕРІРёС‚СЊ РѕРєРЅРѕ.</summary>
+        /// <summary>Прочитать выделение и снимок из Revit и обновить окно.</summary>
         public void RequestRefreshSelection()
         {
             _bridge.Run(app =>
@@ -317,7 +317,7 @@ namespace KzhNotes
 
         private void btnWrite_Click(object sender, RoutedEventArgs e)
         {
-            if (_selIds.Count != 1) { MessageBox.Show("Р’С‹Р±РµСЂРёС‚Рµ СЂРѕРІРЅРѕ РѕРґРёРЅ Р»РёСЃС‚."); return; }
+            if (_selIds.Count != 1) { MessageBox.Show("Выберите ровно один лист."); return; }
             var id = _selIds[0];
             var items = _items.Select(v => v.Item).ToList();
             var snap = _snapshot;
@@ -327,31 +327,31 @@ namespace KzhNotes
                 var sheet = doc.GetElement(new ElementId(id)) as ViewSheet;
                 if (sheet == null) return;
                 var rep = NotesAppService.ApplyAndSave(doc, sheet, items, snap);
-                Dispatcher.Invoke(() => ShowReport(rep, "Р—Р°РїРёСЃР°РЅ Р»РёСЃС‚ " + sheet.SheetNumber));
+                Dispatcher.Invoke(() => ShowReport(rep, "Записан лист " + sheet.SheetNumber));
             });
         }
 
         private void btnUpdateAll_Click(object sender, RoutedEventArgs e)
         {
-            if (MessageBox.Show("РџРµСЂРµСЃРѕР±СЂР°С‚СЊ С‚РµРєСЃС‚ РїСЂРёРјРµС‡Р°РЅРёР№ РЅР° Р’РЎР•РҐ Р»РёСЃС‚Р°С… СЃ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Рј СЃРѕСЃС‚Р°РІРѕРј?",
-                    "РћР±РЅРѕРІРёС‚СЊ РІСЃС‘", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
+            if (MessageBox.Show("Пересобрать текст примечаний на ВСЕХ листах с сохранённым составом?",
+                    "Обновить всё", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
             var snap = _snapshot;
             _bridge.Run(app =>
             {
                 var doc = app.ActiveUIDocument.Document;
                 var rep = NotesAppService.UpdateAllFromStorage(doc, snap);
-                Dispatcher.Invoke(() => ShowReport(rep, "РћР±РЅРѕРІР»РµРЅРёРµ РІСЃРµС… Р»РёСЃС‚РѕРІ"));
+                Dispatcher.Invoke(() => ShowReport(rep, "Обновление всех листов"));
             });
         }
 
         private void ShowReport(OpReport rep, string title)
         {
-            string msg = "РћР±РЅРѕРІР»РµРЅРѕ: " + rep.Updated + "\nРџСЂРѕРїСѓС‰РµРЅРѕ: " + rep.Skipped;
+            string msg = "Обновлено: " + rep.Updated + "\nПропущено: " + rep.Skipped;
             if (rep.Lines.Count > 0)
                 msg += "\n\n" + string.Join("\n", rep.Lines.Take(40)) +
-                       (rep.Lines.Count > 40 ? "\nвЂ¦ (" + (rep.Lines.Count - 40) + " РµС‰С‘)" : "");
+                       (rep.Lines.Count > 40 ? "\n… (" + (rep.Lines.Count - 40) + " ещё)" : "");
             MessageBox.Show(msg, title);
-            // РїРѕСЃР»Рµ Р·Р°РїРёСЃРё РїРѕР»РµР·РЅРѕ РїРµСЂРµС‡РёС‚Р°С‚СЊ СЃРЅРёРјРѕРє (РЅРѕРјРµСЂР° РјРѕРіР»Рё РїРѕРјРµРЅСЏС‚СЊСЃСЏ РІ РґСЂ. СЃРµСЃСЃРёРё)
+            // после записи полезно перечитать снимок (номера могли поменяться в др. сессии)
             RefreshPreview();
         }
     }

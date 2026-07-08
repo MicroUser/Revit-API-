@@ -76,7 +76,7 @@
   <ItemGroup>
     <Compile Include="AssemblytoElementMark.cs" />
     <Compile Include="Debug.cs" />
-    <Compile Include="ElevationTag.cs" />
+    <Compile Include="Опалубка стен\ElevationTag.cs" />
     <Compile Include="Numbering.cs" />
     <Compile Include="CleanParam.cs" />
     <Compile Include="CollisionFunctions.cs" />
@@ -111,7 +111,7 @@
       <DependentUpon>NotesWindow.xaml</DependentUpon>
     </Compile>
     <Compile Include="ScheduleMarking.cs" />
-    <Compile Include="ElevationTag.xaml.cs">
+    <Compile Include="Опалубка стен\ElevationTag.xaml.cs">
       <DependentUpon>ElevationTag.xaml</DependentUpon>
     </Compile>
   </ItemGroup>
@@ -120,7 +120,7 @@
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
-    <Page Include="ElevationTag.xaml">
+    <Page Include="Опалубка стен\ElevationTag.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
