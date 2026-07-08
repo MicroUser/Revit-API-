@@ -64,13 +64,31 @@ namespace Пробник
               )*/
 
               .CreateSeparator()
-            
+
+              .CreateButton<WallRebarAnnotation>("Аннотация арматуры стен", "Аннотация\nарм. стен",
+              btn => btn
+              .SetLargeImage(Resources.Annotation_32)
+              .SetSmallImage(Resources.Annotation_16)
+              .SetLongDescription("Создаёт аннотацию горизонтальной арматуры и П-шек для крайней стены сборки на каждом уровне")
+              )
+
+              .CreateSeparator()
 
               .CreateButton<CreatElevationTags>("Опалубка стен", "Опалубка стен",
               btn => btn
               .SetLargeImage(Resources.dimension_32)
               .SetSmallImage(Resources.dimension_16)
               .SetLongDescription("Создает высотные отметки, размеры ")
+              )
+
+              .CreateSeparator()
+
+              .CreateButton<KzhNotes.NotesCommand>("Примечания на листах", "Примечания",
+              btn => btn
+              .SetLargeImage(Resources.pencil_32)
+              .SetSmallImage(Resources.pencil_16)
+              .SetLongDescription("Генератор примечаний на листах КЖ: библиотека пунктов с токенами, " +
+              "автоматическое разрешение ссылок на листы, сохранение состава в ExtensibleStorage.")
               )
 
               .CreateSeparator();

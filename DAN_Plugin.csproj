@@ -31,6 +31,12 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
+  <PropertyGroup>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
@@ -95,6 +101,15 @@
     <Compile Include="WebAssets.cs" />
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
+    <Compile Include="KzhNotes\NotesCommand.cs" />
+    <Compile Include="KzhNotes\NotesEngine.cs" />
+    <Compile Include="KzhNotes\NotesLibrary.cs" />
+    <Compile Include="KzhNotes\NotesModel.cs" />
+    <Compile Include="KzhNotes\NotesStorage.cs" />
+    <Compile Include="KzhNotes\RevitIntegration.cs" />
+    <Compile Include="KzhNotes\NotesWindow.xaml.cs">
+      <DependentUpon>NotesWindow.xaml</DependentUpon>
+    </Compile>
     <Compile Include="ScheduleMarking.cs" />
     <Compile Include="ElevationTag.xaml.cs">
       <DependentUpon>ElevationTag.xaml</DependentUpon>
@@ -106,6 +121,10 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="ElevationTag.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="KzhNotes\NotesWindow.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
@@ -126,7 +145,7 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="AfterBuild">
-    <Exec Command="xcopy /Y &quot;$(TargetPath)&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
+    <Exec Command="xcopy /Y /I &quot;$(TargetDir)*.dll&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
     <Exec Command="xcopy /Y &quot;$(ProjectDir)lib\Microsoft.Web.WebView2.Core.dll&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
     <Exec Command="xcopy /Y &quot;$(ProjectDir)lib\Microsoft.Web.WebView2.Wpf.dll&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
     <Exec Command="xcopy /Y &quot;$(ProjectDir)checklist.html&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
