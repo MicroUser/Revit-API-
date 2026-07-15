@@ -1,0 +1,57 @@
+<Window x:Class="DAN_Plugin.StairLandingExitsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Параметры выпусков" Width="340" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize">
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="MinWidth" Value="80"/>
+            <Setter Property="Padding" Value="4,2"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="MinWidth" Value="80"/>
+        </Style>
+    </Window.Resources>
+
+    <StackPanel Margin="16">
+        <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="120"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="30"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="30"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Диаметр"/>
+            <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="cbDiameter"/>
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="мм" Margin="6,0,0,0"/>
+
+            <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,4,8,4" VerticalAlignment="Center">
+                <TextBlock Text="BI_A" Margin="0"/>
+                <TextBlock Text="анкеровка в стену" Margin="0" FontSize="10" Foreground="Gray"/>
+            </StackPanel>
+            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="tbA" Text="1000"/>
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="мм" Margin="6,0,0,0"/>
+
+            <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,4,8,4" VerticalAlignment="Center">
+                <TextBlock Text="BI_B" Margin="0"/>
+                <TextBlock Text="анкеровка в плиту" Margin="0" FontSize="10" Foreground="Gray"/>
+            </StackPanel>
+            <TextBox   Grid.Row="2" Grid.Column="1" x:Name="tbB" Text="1000"/>
+            <TextBlock Grid.Row="2" Grid.Column="2" Text="мм" Margin="6,0,0,0"/>
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Отмена" Click="Cancel_Click" MinWidth="75" Margin="0,0,8,0" Padding="8,4"/>
+            <Button Content="ОК"     Click="OK_Click"     MinWidth="75" IsDefault="True" Padding="8,4"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

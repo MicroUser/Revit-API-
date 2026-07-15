@@ -47,43 +47,60 @@ namespace MyPlugin.Loader
 
             panel.AddSeparator();
 
-            var btnElev = (PushButton)panel.AddItem(new PushButtonData(
-                "CreatElevationTags", "Опалубка\nстен", path,
-                "MyPlugin.Loader.ProxyCreatElevationTags")
-            { LongDescription = "Создаёт высотные отметки и размеры." });
+            // Опалубка стен + Аннотация арм. стен — стакованная пара (одна колонка)
+            var stackWalls = panel.AddStackedItems(
+                new PushButtonData("CreatElevationTags", "Опалубка стен", path,
+                    "MyPlugin.Loader.ProxyCreatElevationTags")
+                { LongDescription = "Создаёт высотные отметки и размеры." },
+                new PushButtonData("WallRebarAnnotation", "Аннотация арм. стен", path,
+                    "MyPlugin.Loader.ProxyWallRebarAnnotation")
+                { LongDescription = "Создаёт аннотацию горизонтальной арматуры и П-шек для крайней стены сборки на каждом уровне." });
+            var btnElev = (PushButton)stackWalls[0];
             btnElev.LargeImage = LoadIcon("dimension_32.png");
             btnElev.Image      = LoadIcon("dimension_16.png");
-
-            var btnWallAnnot = (PushButton)panel.AddItem(new PushButtonData(
-                "WallRebarAnnotation", "Аннотация\nарм. стен", path,
-                "MyPlugin.Loader.ProxyWallRebarAnnotation")
-            { LongDescription = "Создаёт аннотацию горизонтальной арматуры и П-шек для крайней стены сборки на каждом уровне." });
-            btnWallAnnot.LargeImage = LoadIcon("pencil_32.png");
-            btnWallAnnot.Image      = LoadIcon("pencil_16.png");
+            var btnWallAnnot = (PushButton)stackWalls[1];
+            btnWallAnnot.LargeImage = LoadIcon("Annotation_32.png");
+            btnWallAnnot.Image      = LoadIcon("Annotation_16.png");
 
             panel.AddSeparator();
 
-            var btnChecklist = (PushButton)panel.AddItem(new PushButtonData(
-                "ChecklistCommand", "Чек-лист\nКЖ", path,
-                "MyPlugin.Loader.ProxyChecklistCommand")
-            { LongDescription = "Открывает чек-лист КЖ с автозаполнением из модели." });
-            btnChecklist.LargeImage = LoadIcon("Annotation_32.png");
-            btnChecklist.Image      = LoadIcon("Annotation_16.png");
+            // Чек-лист КЖ + Примечания КЖ — стакованная пара (одна колонка)
+            var stackDocs = panel.AddStackedItems(
+                new PushButtonData("ChecklistCommand", "Чек-лист КЖ", path,
+                    "MyPlugin.Loader.ProxyChecklistCommand")
+                { LongDescription = "Открывает чек-лист КЖ с автозаполнением из модели." },
+                new PushButtonData("NotesCommand", "Примечания КЖ", path,
+                    "MyPlugin.Loader.ProxyNotesCommand")
+                { LongDescription = "Открывает редактор примечаний КЖ для выбранных листов." });
+            var btnChecklist = (PushButton)stackDocs[0];
+            btnChecklist.LargeImage = LoadIcon("checklist_32.png");
+            btnChecklist.Image      = LoadIcon("checklist_16.png");
+            var btnNotes = (PushButton)stackDocs[1];
+            btnNotes.LargeImage = LoadIcon("pencil_32.png");
+            btnNotes.Image      = LoadIcon("pencil_16.png");
         }
 
-        private static BitmapImage LoadIcon(string fileName)
+        private static BitmapSource LoadIcon(string fileName)
         {
             try
             {
-                string resName = $"MyPlugin.Loader.Resources.{fileName}";
+                string resName = "MyPlugin.Loader.Resources." + fileName;
                 using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resName))
                 {
                     if (s == null) return null;
-                    var img = new BitmapImage();
-                    img.BeginInit();
-                    img.StreamSource = s;
-                    img.CacheOption  = BitmapCacheOption.OnLoad;
-                    img.EndInit();
+                    var frame = BitmapFrame.Create(s, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                    // PNG-файлы имеют нестандартный DPI (~3–48 вместо 96).
+                    // WPF считает логический размер как pixels*96/dpi, поэтому 32px @ 6dpi = 512 логических px.
+                    // Пересоздаём BitmapSource с принудительным 96 DPI.
+                    int stride = (frame.PixelWidth * frame.Format.BitsPerPixel + 7) / 8;
+                    byte[] pixels = new byte[stride * frame.PixelHeight];
+                    frame.CopyPixels(pixels, stride, 0);
+                    var img = BitmapSource.Create(
+                        frame.PixelWidth, frame.PixelHeight,
+                        96, 96,
+                        frame.Format,
+                        frame.Palette,
+                        pixels, stride);
                     img.Freeze();
                     return img;
                 }
@@ -177,5 +194,13 @@ namespace MyPlugin.Loader
     {
         public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
             => HotLoader.Run("RevitKJChecklist.ChecklistCommand", cd, ref msg, els);
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    [Regeneration(RegenerationOption.Manual)]
+    public class ProxyNotesCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
+            => HotLoader.Run("KzhNotes.NotesCommand", cd, ref msg, els);
     }
 }

@@ -30,9 +30,10 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <PropertyGroup>
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win;win-x64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
@@ -68,10 +69,7 @@
       <HintPath>lib\Microsoft.Web.WebView2.Wpf.dll</HintPath>
     </Reference>
     <Reference Include="WindowsBase" />
-    <Reference Include="DAN_Plugin, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>bin\Debug\DAN_Plugin.dll</HintPath>
-    </Reference>
+
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblytoElementMark.cs" />
@@ -93,12 +91,17 @@
     <Compile Include="WallSectionRebarTags.cs" />
     <Compile Include="RebarAnnotation.cs" />
     <Compile Include="NametoMark.cs" />
-    <Compile Include="ChecklistCommand.cs" />
-    <Compile Include="ChecklistWindow.cs" />
-    <Compile Include="DependencyResolver.cs" />
+    <Compile Include="RenameViewsCommand.cs" />
+    <Compile Include="StairLandingExitsCommand.cs" />
+    <Compile Include="StairLandingExitsWindow.xaml.cs">
+      <DependentUpon>StairLandingExitsWindow.xaml</DependentUpon>
+    </Compile>
     <Compile Include="JsonUtil.cs" />
     <Compile Include="ModelReader.cs" />
-    <Compile Include="WebAssets.cs" />
+    <Compile Include="Чеклист\ChecklistCommand.cs" />
+    <Compile Include="Чеклист\ChecklistWindow.cs" />
+    <Compile Include="Чеклист\DependencyResolver.cs" />
+    <Compile Include="Чеклист\WebAssets.cs" />
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
     <Compile Include="KzhNotes\NotesCommand.cs" />
@@ -128,6 +131,10 @@
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
+    <Page Include="StairLandingExitsWindow.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Properties\Resources.resx">
@@ -139,15 +146,10 @@
     <Folder Include="Resources\" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="checklist.html">
+    <Content Include="Чеклист\checklist.html">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Target Name="AfterBuild">
-    <Exec Command="xcopy /Y /I &quot;$(TargetDir)*.dll&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
-    <Exec Command="xcopy /Y &quot;$(ProjectDir)lib\Microsoft.Web.WebView2.Core.dll&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
-    <Exec Command="xcopy /Y &quot;$(ProjectDir)lib\Microsoft.Web.WebView2.Wpf.dll&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
-    <Exec Command="xcopy /Y &quot;$(ProjectDir)checklist.html&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
-  </Target>
 </Project>

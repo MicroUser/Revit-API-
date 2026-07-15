@@ -47,6 +47,8 @@
     <EmbeddedResource Include="Resources\dimension_16.png" />
     <EmbeddedResource Include="Resources\Annotation_32.png" />
     <EmbeddedResource Include="Resources\Annotation_16.png" />
+    <EmbeddedResource Include="Resources\checklist_32.png" />
+    <EmbeddedResource Include="Resources\checklist_16.png" />
     <EmbeddedResource Include="Resources\pencil_32.png" />
     <EmbeddedResource Include="Resources\pencil_16.png" />
   </ItemGroup>

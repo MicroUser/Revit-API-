@@ -24,42 +24,44 @@ namespace DAN_Plugin
                 return Result.Failed;
             }
 
-            Wall wall;
+            AssemblyInstance assembly;
             try
             {
                 Reference pickedRef = uiDoc.Selection.PickObject(
                     ObjectType.Element,
-                    new WallFilter(),
-                    "Выберите стену для расстановки марок арматуры");
-                wall = doc.GetElement(pickedRef) as Wall;
+                    new AssemblyFilter(),
+                    "Выберите сборку для расстановки марок арматуры");
+                assembly = doc.GetElement(pickedRef) as AssemblyInstance;
             }
             catch (Autodesk.Revit.Exceptions.OperationCanceledException)
             {
                 return Result.Cancelled;
             }
 
-            if (wall == null) return Result.Failed;
+            if (assembly == null) return Result.Failed;
 
-            // Диалог выбора стороны расстановки марок
-            TaskDialog placeDlg = new TaskDialog("Марки арматуры");
-            placeDlg.MainInstruction = "Расположение марок";
-            placeDlg.MainContent = "С какой стороны стены создать марки арматуры?";
-            placeDlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Сверху стены");
-            placeDlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Снизу стены");
-            placeDlg.CommonButtons = TaskDialogCommonButtons.Cancel;
+            // Все стены — члены выбранной сборки, видимые на текущем виде
+            ICollection<ElementId> memberIds = assembly.GetMemberIds();
+            var walls = new FilteredElementCollector(doc, sectionView.Id)
+                .OfCategory(BuiltInCategory.OST_Walls)
+                .WhereElementIsNotElementType()
+                .Cast<Wall>()
+                .Where(w => memberIds.Contains(w.Id))
+                .ToList();
 
-            TaskDialogResult dlgResult = placeDlg.Show();
-            bool placeAbove;
-            if      (dlgResult == TaskDialogResult.CommandLink1) placeAbove = true;
-            else if (dlgResult == TaskDialogResult.CommandLink2) placeAbove = false;
-            else return Result.Cancelled;
+            if (!walls.Any())
+            {
+                TaskDialog.Show("Ошибка", "В выбранной сборке нет стен, видимых на активном виде.");
+                return Result.Failed;
+            }
 
             using (Transaction tx = new Transaction(doc, "Марки арматуры разреза"))
             {
                 tx.Start();
                 try
                 {
-                    PlaceRebarTags(doc, sectionView, wall, sectionView.RightDirection, placeAbove);
+                    foreach (var wall in walls)
+                        PlaceRebarTags(doc, sectionView, wall, sectionView.RightDirection, placeAbove: true);
                     tx.Commit();
                 }
                 catch (Exception ex)
@@ -89,6 +91,9 @@ namespace DAN_Plugin
             XYZ upDir = XYZ.BasisZ.Negate().CrossProduct(wallDir).Normalize();
             double cutZ = sectionView.Origin.Z;
 
+            // Секции стены по продольным граням (для кластеризации, П-шек и горизонтальных марок)
+            var wallSegments = GetWallSegments(wall, sectionView, wallDir);
+
             // ── Сбор арматуры ──────────────────────────────────────────────
             var allRebar = new FilteredElementCollector(doc, sectionView.Id)
                 .OfCategory(BuiltInCategory.OST_Rebar)
@@ -113,10 +118,20 @@ namespace DAN_Plugin
                     .ToList();
             }
 
-            if (!allRebar.Any())
-                throw new InvalidOperationException(
-                    $"В виде \"{sectionView.Name}\" не найдено арматуры" +
-                    (targetMark != null ? $" с BI_марка_конструкции = \"{targetMark}\"" : "") + ".");
+            if (!allRebar.Any()) return; // нет арматуры для этой стены — пропускаем
+
+            // Пространственные границы текущей стены (для фильтрации чужой арматуры из вида)
+            XYZ wp0 = wallLine.GetEndPoint(0);
+            XYZ wp1 = wallLine.GetEndPoint(1);
+            double wWallMin = Math.Min(wp0.DotProduct(wallDir), wp1.DotProduct(wallDir));
+            double wWallMax = Math.Max(wp0.DotProduct(wallDir), wp1.DotProduct(wallDir));
+            double wWallTol = UnitUtils.ConvertToInternalUnits(300, UnitTypeId.Millimeters);
+
+            double wallCenterU  = wp0.DotProduct(upDir);
+            double halfThickness = wall.Width / 2.0;
+            double uWallTol = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+            double uWallMin = wallCenterU - halfThickness - uWallTol;
+            double uWallMax = wallCenterU + halfThickness + uWallTol;
 
             // Каждая запись — один стержень массива (первый или последний).
             // Reference хранит конкретный subelement для правильного тега.
@@ -151,10 +166,10 @@ namespace DAN_Plugin
                 int nBars    = Math.Max(1, rebar.NumberOfBarPositions);
                 int subsCount = subs?.Count ?? 0;
 
-                // ── Позиция первого стержня ────────────────────────────────
+                // ── Позиция первого стержня + направление ─────────────────
                 XYZ firstBarPt = null;
                 bool isVertical = false;
-                bool isStraightHorizontal = false; // прямой стержень вдоль стены (форма 1)
+                bool isGeomHorizontal = false; // прямой стержень вдоль стены по геометрии
                 try
                 {
                     IList<Curve> c0 = rebar.GetCenterlineCurves(
@@ -164,29 +179,49 @@ namespace DAN_Plugin
                         firstBarPt = c0[0].Evaluate(0.5, true);
                         if (c0[0] is Line bl)
                         {
-                            isVertical = Math.Abs(bl.Direction.Z) > 0.9;
-                            // Форма 1: прямой стержень, направление вдоль стены (не вертикальный)
-                            isStraightHorizontal = !isVertical
+                            isVertical       = Math.Abs(bl.Direction.Z) > 0.9;
+                            isGeomHorizontal = !isVertical
                                 && Math.Abs(bl.Direction.DotProduct(wallDir)) > 0.7;
                         }
                     }
                 }
                 catch { }
 
-                if (!isVertical)
+                // ── Классификация: BI-параметр (приоритет) или геометрия (fallback) ──
+                string biFilter = null;
                 {
-                    // Горизонтальные прямые стержни (форма 1): собираем для отдельного тегирования
-                    if (isStraightHorizontal && firstBarPt != null)
+                    Parameter bp = rebar.LookupParameter("BI_фильтр_арматуры")
+                        ?? doc.GetElement(rebar.GetTypeId())?.LookupParameter("BI_фильтр_арматуры");
+                    if (bp != null && bp.StorageType == StorageType.String)
+                        biFilter = bp.AsString();
+                }
+                bool isStraightHorizontal =
+                    (biFilter != null && biFilter.IndexOf("Горизонтальное армирование", StringComparison.OrdinalIgnoreCase) >= 0)
+                    || (biFilter == null && isGeomHorizontal);
+
+                if (isStraightHorizontal)
+                {
+                    if (firstBarPt == null)
+                    {
+                        BoundingBoxXYZ bbH = rb.get_BoundingBox(sectionView) ?? rb.get_BoundingBox(null);
+                        if (bbH != null) firstBarPt = (bbH.Min + bbH.Max) / 2.0;
+                    }
+                    if (firstBarPt == null) continue;
+                    double hW = firstBarPt.DotProduct(wallDir);
+                    double hU = firstBarPt.DotProduct(upDir);
+                    if (hW < wWallMin - wWallTol || hW > wWallMax + wWallTol) continue;
+                    if (hU < uWallMin || hU > uWallMax) continue;
                     {
                         Reference refH = subsCount > 0 ? subs[0].GetReference() : null;
                         if (refH == null) { try { refH = new Reference(rebar); } catch { } }
                         if (refH != null)
-                            hItems.Add((rb, refH, pos, diam,
-                                        firstBarPt.DotProduct(wallDir),
-                                        firstBarPt.DotProduct(upDir)));
+                            hItems.Add((rb, refH, pos, diam, hW, hU));
                     }
-                    continue; // только вертикальные стержни идут в items
+                    continue; // горизонтальные не идут в items
                 }
+
+                if (!isVertical)
+                    continue; // не горизонтальное и не вертикальное — пропускаем
 
                 if (firstBarPt == null)
                 {
@@ -194,6 +229,13 @@ namespace DAN_Plugin
                     if (bb0 != null) firstBarPt = (bb0.Min + bb0.Max) / 2.0;
                 }
                 if (firstBarPt == null) continue;
+
+                {
+                    double vW = firstBarPt.DotProduct(wallDir);
+                    double vU = firstBarPt.DotProduct(upDir);
+                    if (vW < wWallMin - wWallTol || vW > wWallMax + wWallTol) continue;
+                    if (vU < uWallMin || vU > uWallMax) continue;
+                }
 
                 Reference ref0 = subsCount > 0 ? subs[0].GetReference() : null;
                 if (ref0 == null) { try { ref0 = new Reference(rebar); } catch { } }
@@ -403,8 +445,14 @@ namespace DAN_Plugin
                     // Элементы, общие для двух соседних столбцов — это первый и последний стержень одного массива.
                     var prevUids = new HashSet<string>(wCols[ci - 1].Select(i => i.elem.UniqueId));
                     bool hasSharedElems = wCols[ci].Any(i => prevUids.Contains(i.elem.UniqueId));
-                    // Продолжаем кластер если: сигнатура та же И (есть общие элементы ИЛИ разрыв небольшой)
-                    if (sig == curSig && (hasSharedElems || gap <= gapTol))
+                    // Жёсткий разрыв на границе секций стены (проём не даёт слиться)
+                    double wPrev = wCols[ci - 1][wCols[ci - 1].Count - 1].wProj;
+                    double wNext = wCols[ci][0].wProj;
+                    int secPrev = wallSegments.FindIndex(s => wPrev >= s.wLeft - 1e-3 && wPrev <= s.wRight + 1e-3);
+                    int secNext = wallSegments.FindIndex(s => wNext >= s.wLeft - 1e-3 && wNext <= s.wRight + 1e-3);
+                    bool crossesOpening = wallSegments.Count >= 2 && secPrev >= 0 && secNext >= 0 && secPrev != secNext;
+                    // Продолжаем кластер если: сигнатура та же И (есть общие элементы ИЛИ разрыв небольшой) И не пересекает проём
+                    if (sig == curSig && (hasSharedElems || gap <= gapTol) && !crossesOpening)
                     {
                         curCluster.Add(wCols[ci]);
                     }
@@ -432,15 +480,21 @@ namespace DAN_Plugin
             {
                 var merged2 = new List<List<List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)>>>();
                 string prevSig2 = null;
+                int prevSec2 = -1;
                 foreach (var sc in spatialClusters)
                 {
-                    string sig2 = ColSig(sc.SelectMany(c => c).ToList());
-                    if (prevSig2 != null && sig2 == prevSig2)
+                    var scAll = sc.SelectMany(c => c).ToList();
+                    string sig2 = ColSig(scAll);
+                    double scMinW = scAll.Min(i => i.wProj);
+                    int curSec2 = wallSegments.FindIndex(s => scMinW >= s.wLeft - 1e-3 && scMinW <= s.wRight + 1e-3);
+                    bool sameSection = wallSegments.Count < 2 || prevSec2 < 0 || curSec2 < 0 || prevSec2 == curSec2;
+                    if (prevSig2 != null && sig2 == prevSig2 && sameSection)
                         merged2[merged2.Count - 1].AddRange(sc);
                     else
                     {
                         merged2.Add(new List<List<(Element, Reference, int, double, double, double)>>(sc));
                         prevSig2 = sig2;
+                        prevSec2 = curSec2;
                     }
                 }
                 spatialClusters = merged2;
@@ -547,19 +601,89 @@ namespace DAN_Plugin
                 wallDir.Multiply(w) + upDir.Multiply(u) + XYZ.BasisZ.Multiply(cutZ);
 
             // ── Параметры раскладки ────────────────────────────────────────
-            double wallMinU = items.Min(r => r.uProj);
-            double wallMaxU = items.Max(r => r.uProj);
+            double wallMinU  = items.Min(r => r.uProj);
+            double wallMaxU  = items.Max(r => r.uProj);
+            double wallMidU  = (wallMinU + wallMaxU) / 2.0;
             double tagOffset = UnitUtils.ConvertToInternalUnits(250, UnitTypeId.Millimeters);
-            double tagU = placeAbove
-                ? wallMinU - tagOffset
-                : wallMaxU + tagOffset;
-            double halfGap  = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+            double tagUOuter = wallMinU - tagOffset;  // со стороны внешней грани
+            double tagUInner = wallMaxU + tagOffset;  // со стороны внутренней грани
+            double halfGap   = UnitUtils.ConvertToInternalUnits(150, UnitTypeId.Millimeters);
+
+            // ── Диагностика: распределение позиций по граням ──────────────
+            diagSb.AppendLine($"\n=== Грани: wallMinU={ToMm(wallMinU)}мм  wallMaxU={ToMm(wallMaxU)}мм  mid={ToMm(wallMidU)}мм ===");
+            foreach (var ig in items.GroupBy(r => (r.pos, Math.Round(r.diam, 4))).OrderBy(g => g.Key.pos))
+            {
+                double avgU = ig.Average(r => r.uProj);
+                string face = avgU <= wallMidU ? "ВНЕШНЯЯ" : "ВНУТРЕННЯЯ";
+                diagSb.AppendLine($"  pos={ig.Key.pos} d={ToMm(ig.Key.Item2)}мм: {ig.Count()}шт  avgU={ToMm(avgU)}мм → {face}");
+            }
+
 
             // ── Создание тегов ─────────────────────────────────────────────
-            // Логика: внутри каждой (pos1,pos2)-группы сначала разбиваем на
-            // per-array кластеры (по uid1,uid2), потом сливаем соседние кластеры
-            // если разрыв между концами ≤ 250 мм (шаг стержней).
-            double mergeGap = UnitUtils.ConvertToInternalUnits(250, UnitTypeId.Millimeters);
+            double mergeGap = UnitUtils.ConvertToInternalUnits(600, UnitTypeId.Millimeters);
+            double tagStep  = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+
+            // ── Группировка cross-пар по перекрывающимся W-диапазонам ──────
+            // Шаг 1: W-диапазон каждой cross-(pos1,pos2)-группы
+            var crossGroupRanges = allPairs
+                .GroupBy(p => (p.pos1, p.pos2))
+                .Where(g => g.Key.pos1 != g.Key.pos2)
+                .ToDictionary(
+                    g => g.Key,
+                    g => (minW: g.Min(p => Math.Min(p.w1, p.w2)),
+                          maxW: g.Max(p => Math.Max(p.w1, p.w2))));
+
+            // Шаг 2: interval-merging по minW
+            var overlapBlocks = new List<List<(int pos1, int pos2)>>();
+            {
+                var sorted = crossGroupRanges.OrderBy(kv => kv.Value.minW).ToList();
+                if (sorted.Count > 0)
+                {
+                    var cur = new List<(int, int)> { sorted[0].Key };
+                    double curMax = sorted[0].Value.maxW;
+                    for (int bi = 1; bi < sorted.Count; bi++)
+                    {
+                        if (sorted[bi].Value.minW <= curMax)
+                        {
+                            cur.Add(sorted[bi].Key);
+                            curMax = Math.Max(curMax, sorted[bi].Value.maxW);
+                        }
+                        else
+                        {
+                            overlapBlocks.Add(cur);
+                            cur = new List<(int, int)> { sorted[bi].Key };
+                            curMax = sorted[bi].Value.maxW;
+                        }
+                    }
+                    overlapBlocks.Add(cur);
+                }
+            }
+
+            // Шаг 3: для каждого блока — общий центр + W каждой позиции
+            // crossPairTagW[(pos1,pos2)] = (shW1, shW2)
+            var crossPairTagW = new Dictionary<(int pos1, int pos2), (double shW1, double shW2)>();
+            foreach (var block in overlapBlocks)
+            {
+                // Центр — среднее всех midW пар в блоке
+                double center = block
+                    .SelectMany(key => allPairs.Where(p => p.pos1 == key.pos1 && p.pos2 == key.pos2)
+                                               .Select(p => (p.w1 + p.w2) / 2.0))
+                    .Average();
+
+                // Уникальные позиции блока по возрастанию номера
+                var positions = block
+                    .SelectMany(kb => new[] { kb.pos1, kb.pos2 })
+                    .Distinct().OrderBy(p => p).ToList();
+                int n = positions.Count;
+                var posW = new Dictionary<int, double>();
+                for (int i = 0; i < n; i++)
+                    posW[positions[i]] = n == 1
+                        ? center
+                        : center + (i - (n - 1) / 2.0) * tagStep;
+
+                foreach (var key in block)
+                    crossPairTagW[key] = (posW[key.pos1], posW[key.pos2]);
+            }
 
             int tagsPlaced = 0;
             var errors = new List<string>();
@@ -598,14 +722,21 @@ namespace DAN_Plugin
 
                 foreach (var cluster in merged)
                 {
+                    // Сторона для ref1 и ref2 определяется независимо по их U-позиции.
+                    // Для self-пар u1≈u2 → tagU1==tagU2. Для cross-пар (внешняя+внутренняя)
+                    // каждый ref получает свою сторону.
+                    double avgU1 = cluster.Average(p => p.u1);
+                    double avgU2 = cluster.Average(p => p.u2);
+                    double tagU1 = avgU1 <= wallMidU ? tagUOuter : tagUInner;
+                    double tagU2 = avgU2 <= wallMidU ? tagUOuter : tagUInner;
+                    double tagU  = tagU1; // для self-пар tagU1==tagU2
                     double canonW = cluster.Average(p => (p.w1 + p.w2) / 2.0);
                     double shift  = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
 
                     if (isSelfPair)
                     {
-                        // Одинаковые позиции: один тип "Позиция", все марки в одной точке.
-                        // Крайние W-группы кластера определяют первый/последний стержни массивов.
-                        XYZ    tagPt     = MakePt(canonW, tagU);
+                        double shW = canonW;
+                        XYZ    tagPt     = MakePt(shW, tagU);
                         double tol       = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
                         double minAvgW   = cluster.Min(p => (p.w1 + p.w2) / 2.0);
                         double maxAvgW   = cluster.Max(p => (p.w1 + p.w2) / 2.0);
@@ -616,7 +747,7 @@ namespace DAN_Plugin
                         foreach (var p in leftPairs)
                         {
                             XYZ anchor = MakePt(p.w1, p.u1);
-                            XYZ elbow  = MakePt(p.w1 + Math.Sign(canonW - p.w1) * shift, tagU);
+                            XYZ elbow  = MakePt(p.w1 + Math.Sign(shW - p.w1) * shift, tagU);
                             try
                             {
                                 var t = IndependentTag.Create(doc, tagStd.Id, sectionView.Id,
@@ -633,11 +764,11 @@ namespace DAN_Plugin
                         // Последние стержни последних массивов (правая граница → ref2)
                         var rightPairs = twoGroups
                             ? cluster.Where(p => Math.Abs((p.w1 + p.w2) / 2.0 - maxAvgW) < tol).ToList()
-                            : leftPairs; // один W-уровень: те же пары, но ref2
+                            : leftPairs;
                         foreach (var p in rightPairs)
                         {
                             XYZ anchor = MakePt(p.w2, p.u2);
-                            XYZ elbow  = MakePt(p.w2 + Math.Sign(canonW - p.w2) * shift, tagU);
+                            XYZ elbow  = MakePt(p.w2 + Math.Sign(shW - p.w2) * shift, tagU);
                             try
                             {
                                 var t = IndependentTag.Create(doc, tagStd.Id, sectionView.Id,
@@ -653,13 +784,19 @@ namespace DAN_Plugin
                     }
                     else
                     {
-                        // Разные позиции: tagNoShelf (pos1) + tagStd (pos2) на двух точках
-                        XYZ ptNoShelf = MakePt(canonW - halfGap, tagU);
-                        XYZ ptStd     = MakePt(canonW + halfGap, tagU);
+                        // Cross-пара: позиции из общего блока перекрывающихся диапазонов
+                        double shW1, shW2;
+                        if (crossPairTagW.TryGetValue((posGroup.Key.pos1, posGroup.Key.pos2), out var tagWs))
+                        { shW1 = tagWs.shW1; shW2 = tagWs.shW2; }
+                        else
+                        { shW1 = canonW - tagStep / 2.0; shW2 = canonW + tagStep / 2.0; }
+                        XYZ ptNoShelf = MakePt(shW1, tagU1);
+                        XYZ ptStd     = MakePt(shW2, tagU2);
 
                         var startP   = cluster[0];
                         double sMid  = (startP.w1 + startP.w2) / 2.0;
-                        XYZ sElbow   = MakePt(sMid + Math.Sign(canonW - sMid) * shift, tagU);
+                        XYZ sElbow1  = MakePt(sMid + Math.Sign(shW1 - sMid) * shift, tagU1);
+                        XYZ sElbow2  = MakePt(sMid + Math.Sign(shW2 - sMid) * shift, tagU2);
 
                         try
                         {
@@ -667,7 +804,7 @@ namespace DAN_Plugin
                                 startP.ref1, true, TagOrientation.Horizontal, ptNoShelf);
                             t1.LeaderEndCondition = LeaderEndCondition.Free;
                             t1.SetLeaderEnd(startP.ref1, MakePt(startP.w1, startP.u1));
-                            t1.SetLeaderElbow(startP.ref1, sElbow);
+                            t1.SetLeaderElbow(startP.ref1, sElbow1);
                             t1.TagHeadPosition = ptNoShelf;
                             tagsPlaced++;
                         }
@@ -679,7 +816,7 @@ namespace DAN_Plugin
                                 startP.ref2, true, TagOrientation.Horizontal, ptStd);
                             t2.LeaderEndCondition = LeaderEndCondition.Free;
                             t2.SetLeaderEnd(startP.ref2, MakePt(startP.w2, startP.u2));
-                            t2.SetLeaderElbow(startP.ref2, sElbow);
+                            t2.SetLeaderElbow(startP.ref2, sElbow2);
                             t2.TagHeadPosition = ptStd;
                             tagsPlaced++;
                         }
@@ -689,7 +826,8 @@ namespace DAN_Plugin
                         {
                             var endP    = cluster[cluster.Count - 1];
                             double eMid = (endP.w1 + endP.w2) / 2.0;
-                            XYZ eElbow  = MakePt(eMid + Math.Sign(canonW - eMid) * shift, tagU);
+                            XYZ eElbow1 = MakePt(eMid + Math.Sign(canonW - eMid) * shift, tagU1);
+                            XYZ eElbow2 = MakePt(eMid + Math.Sign(canonW - eMid) * shift, tagU2);
 
                             try
                             {
@@ -697,7 +835,7 @@ namespace DAN_Plugin
                                     endP.ref1, true, TagOrientation.Horizontal, ptNoShelf);
                                 t3.LeaderEndCondition = LeaderEndCondition.Free;
                                 t3.SetLeaderEnd(endP.ref1, MakePt(endP.w1, endP.u1));
-                                t3.SetLeaderElbow(endP.ref1, eElbow);
+                                t3.SetLeaderElbow(endP.ref1, eElbow1);
                                 t3.TagHeadPosition = ptNoShelf;
                                 tagsPlaced++;
                             }
@@ -709,7 +847,7 @@ namespace DAN_Plugin
                                     endP.ref2, true, TagOrientation.Horizontal, ptStd);
                                 t4.LeaderEndCondition = LeaderEndCondition.Free;
                                 t4.SetLeaderEnd(endP.ref2, MakePt(endP.w2, endP.u2));
-                                t4.SetLeaderElbow(endP.ref2, eElbow);
+                                t4.SetLeaderElbow(endP.ref2, eElbow2);
                                 t4.TagHeadPosition = ptStd;
                                 tagsPlaced++;
                             }
@@ -725,10 +863,10 @@ namespace DAN_Plugin
             PlaceWallDimensions(doc, sectionView, wall, wallDir, upDir, cutZ, items, diagSb);
 
             // ── Размеры поперёк стены (толщина / привязки) ───────────────────
-            PlaceCrossDimensions(doc, sectionView, wall, wallDir, upDir, cutZ, items, wallLine, diagSb);
+            PlaceCrossDimensions(doc, sectionView, wall, wallDir, upDir, cutZ, items, hItems, wallLine, diagSb);
 
             // ── Марки горизонтальных стержней формы 1 ───────────────────────
-            PlaceHorizontalBarTags(doc, sectionView, wallDir, upDir, cutZ, wallLine, hItems);
+            PlaceHorizontalBarTags(doc, sectionView, wallDir, upDir, cutZ, wallLine, hItems, wallSegments);
 
             // ── Диагностика П-шек ─────────────────────────────────────────────
             {
@@ -774,8 +912,8 @@ namespace DAN_Plugin
                 double wallWCenter = (wallLine.GetEndPoint(0).DotProduct(wallDir) +
                                       wallLine.GetEndPoint(1).DotProduct(wallDir)) / 2.0;
 
-                double pSideOffset = UnitUtils.ConvertToInternalUnits(500, UnitTypeId.Millimeters);
-                double pUpOffset   = UnitUtils.ConvertToInternalUnits(400, UnitTypeId.Millimeters);
+                double pSideOffset = UnitUtils.ConvertToInternalUnits(350, UnitTypeId.Millimeters);
+                double pUpOffset   = UnitUtils.ConvertToInternalUnits(300, UnitTypeId.Millimeters);
 
                 foreach (Element rb in allRebar)
                 {
@@ -839,7 +977,18 @@ namespace DAN_Plugin
 
                     double barWCenter = (barWMin + barWMax) / 2.0;
                     double barUCenter = (barUMin + barUMax) / 2.0;
-                    double sideSign   = barWCenter >= wallWCenter ? 1.0 : -1.0;
+
+                    // Направление тега — от центра своей секции:
+                    // крайние П-шки смотрят к торцу стены, П-шки у проёма — к проёму.
+                    double sideSign;
+                    {
+                        int secIdx = wallSegments.FindIndex(sec =>
+                            barWCenter >= sec.wLeft - 1e-3 && barWCenter <= sec.wRight + 1e-3);
+                        double centerW = (wallSegments.Count >= 2 && secIdx >= 0)
+                            ? (wallSegments[secIdx].wLeft + wallSegments[secIdx].wRight) / 2.0
+                            : wallWCenter;
+                        sideSign = barWCenter >= centerW ? 1.0 : -1.0;
+                    }
 
                     double anchorW    = sideSign > 0 ? barWMax : barWMin;
                     XYZ leaderAnchor  = MakePt(anchorW, barUCenter);
@@ -873,10 +1022,11 @@ namespace DAN_Plugin
             Document doc, ViewSection sectionView, Wall wall,
             XYZ wallDir, XYZ upDir, double cutZ,
             List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)> items,
+            List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)> hItems,
             Line wallLine,
             System.Text.StringBuilder diagSb = null)
         {
-            if (!items.Any()) return;
+            if (!items.Any() && !hItems.Any()) return;
 
             double ToMmU(double v) => Math.Round(UnitUtils.ConvertFromInternalUnits(v, UnitTypeId.Millimeters));
 
@@ -939,41 +1089,128 @@ namespace DAN_Plugin
             }
             gridRefs.Sort((a, b) => a.u.CompareTo(b.u));
 
-            // Ссылки на арматуру вдоль upDir: передний ряд (min U) и задний ряд (max U)
-            double uMinRebar = items.Min(r => r.uProj);
-            double uMaxRebar = items.Max(r => r.uProj);
-            double rowTol    = UnitUtils.ConvertToInternalUnits(20, UnitTypeId.Millimeters);
+            // Ссылки на арматуру вдоль upDir — привязка по внутренней грани стержня.
+            // Приоритет: solid-рёбра горизонтальных стержней (hItems) → П-шки → items.
+            double rowTol = UnitUtils.ConvertToInternalUnits(20, UnitTypeId.Millimeters);
+            double barTol = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
 
-            (Reference rf, int elemId, double uFound) FindRebarRefAtU(double targetU)
+            double uMinTarget, uMaxTarget;
+            string crossRefSource;
+            if (hItems.Any())
             {
-                foreach (var item in items.OrderBy(r => Math.Abs(r.uProj - targetU)))
-                {
-                    Rebar rb = item.elem as Rebar;
-                    if (rb == null) continue;
-                    var lrs = GetVerticalBarLineRefs(rb, sectionView, wallDir, upDir);
-                    var c = lrs.Where(lr => Math.Abs(lr.uCoord - targetU) < rowTol)
-                               .OrderBy(lr => Math.Abs(lr.uCoord - targetU))
-                               .FirstOrDefault();
-                    if (c.rf != null) return (c.rf, item.elem.Id.IntegerValue, c.uCoord);
-                }
-                return (null, -1, 0);
+                uMinTarget    = hItems.Min(r => r.uProj);
+                uMaxTarget    = hItems.Max(r => r.uProj);
+                crossRefSource = "hItems";
+            }
+            else if (items.Any())
+            {
+                uMinTarget    = items.Min(r => r.uProj);
+                uMaxTarget    = items.Max(r => r.uProj);
+                crossRefSource = "items-цель";
+            }
+            else
+            {
+                uMinTarget = uMaxTarget = 0;
+                crossRefSource = "нет";
             }
 
-            var frResult = FindRebarRefAtU(uMinRebar);
-            Reference frontRef = frResult.rf;
-            var brResult = Math.Abs(uMaxRebar - uMinRebar) > rowTol
-                           ? FindRebarRefAtU(uMaxRebar) : (null, -1, 0.0);
-            Reference backRef = brResult.rf;
+            // Горизонтальные стержни: solid-рёбра из геометрии без привязки к виду.
+            // Это даёт Edge.Reference (глобальные), а не Line.Reference (view-specific) — размер виден после коммита.
+            var hBarEdges = new List<(int elemId, Reference rf, double wCoord, double uCoord)>();
+            // П-шки и вертикальные стержни (fallback когда нет горизонтальных)
+            var pshEdges  = new List<(int elemId, Reference rf, double wCoord, double uCoord)>();
+            var itemEdges = new List<(int elemId, Reference rf, double wCoord, double uCoord)>();
+            if (crossRefSource != "нет")
+            {
+                foreach (var item in hItems)
+                {
+                    if (item.elem is Rebar rb)
+                    {
+                        int eid = rb.Id.IntegerValue;
+                        foreach (var er in GetHorizontalBarSolidEdgeRefs(rb, sectionView, wallDir, upDir))
+                            hBarEdges.Add((eid, er.rf, er.wCoord, er.uCoord));
+                    }
+                }
+                if (!hBarEdges.Any())
+                {
+                    // Fallback 1: П-шки — ищем wallDir-параллельные рёбра соединительного прута
+                    // (та же функция что для горизонтальных, даёт inner face через max/min uCoord)
+                    const string pPfx = "(форма)П-шка";
+                    foreach (var rb in new FilteredElementCollector(doc, sectionView.Id)
+                        .OfClass(typeof(Rebar)).Cast<Rebar>()
+                        .Where(r => r.GetHostId() == wall.Id))
+                    {
+                        RebarShape shp = doc.GetElement(rb.GetShapeId()) as RebarShape;
+                        if (shp == null) continue;
+                        if (!shp.Name.StartsWith(pPfx, StringComparison.OrdinalIgnoreCase)
+                            && !shp.Name.Equals("(форма)21", StringComparison.OrdinalIgnoreCase)) continue;
+                        int eid = rb.Id.IntegerValue;
+                        foreach (var er in GetHorizontalBarSolidEdgeRefs(rb, sectionView, wallDir, upDir))
+                            pshEdges.Add((eid, er.rf, er.wCoord, er.uCoord));
+                    }
+                    if (!pshEdges.Any())
+                    {
+                        // Fallback 2: вертикальные стержни (Z-параллельные рёбра)
+                        foreach (var item in items)
+                        {
+                            if (item.elem is Rebar rb)
+                            {
+                                int eid = rb.Id.IntegerValue;
+                                foreach (var vr in GetVerticalBarLineRefs(rb, sectionView, wallDir, upDir))
+                                    itemEdges.Add((eid, vr.rf, vr.wCoord, vr.uCoord));
+                            }
+                        }
+                    }
+                }
+                crossRefSource += hBarEdges.Any() ? " + hBar-solid"
+                    : pshEdges.Any() ? " + П-шки-solid"
+                    : " + items";
+            }
+
+            // Выбор frontRef / backRef по U-позиции (inner face).
+            // frontRef: max uCoord ≤ uMinTarget + barTol  → внутренняя грань передней ножки
+            // backRef:  min uCoord ≥ uMaxTarget - barTol  → внутренняя грань задней ножки
+            // П-шка — один элемент, поэтому elemId-проверку не применяем (обе ножки = один elemId).
+            double wTol = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+            Reference frontRef = null, backRef = null;
+            {
+                var allEdges = hBarEdges.Any() ? hBarEdges
+                    : pshEdges.Any() ? pshEdges
+                    : itemEdges;
+
+                double wMin = allEdges.Any() ? allEdges.Min(r => r.wCoord) : 0;
+                double effWTol = hBarEdges.Any()
+                    ? double.MaxValue   // горизонтальные бары: без W-фильтра
+                    : wTol;
+
+                // Передняя ножка: наибольший uCoord среди рёбер вблизи переднего слоя
+                var srcF = allEdges
+                    .Where(r => r.wCoord <= wMin + effWTol && r.uCoord <= uMinTarget + barTol)
+                    .OrderByDescending(r => r.uCoord).ToList();
+                if (srcF.Any()) frontRef = srcF[0].rf;
+
+                if (uMaxTarget - uMinTarget > rowTol)
+                {
+                    // Задняя ножка: наименьший uCoord среди рёбер вблизи заднего слоя
+                    var srcB = allEdges
+                        .Where(r => r.wCoord <= wMin + effWTol && r.uCoord >= uMaxTarget - barTol)
+                        .OrderBy(r => r.uCoord).ToList();
+                    if (!srcB.Any())
+                    {
+                        // Fallback: без ограничения по W
+                        srcB = allEdges
+                            .Where(r => r.uCoord >= uMaxTarget - barTol)
+                            .OrderBy(r => r.uCoord).ToList();
+                    }
+                    if (srcB.Any()) backRef = srcB[0].rf;
+                }
+            }
 
             diagSb?.AppendLine("\n=== PlaceCrossDimensions ===");
             diagSb?.AppendLine($"  facesU ({facesU.Count}): {string.Join(", ", facesU.Select(f => $"{ToMmU(f.u)}мм"))}");
             diagSb?.AppendLine($"  gridRefs: {gridRefs.Count}");
-            diagSb?.AppendLine($"  items uProj: {string.Join(", ", items.Select(r => $"{ToMmU(r.uProj)}мм"))}");
-            diagSb?.AppendLine($"  uMinRebar={ToMmU(uMinRebar)}мм  uMaxRebar={ToMmU(uMaxRebar)}мм  diff={ToMmU(Math.Abs(uMaxRebar - uMinRebar))}мм  rowTol={ToMmU(rowTol)}мм");
-            diagSb?.AppendLine($"  frontRef: {(frontRef != null ? $"найден  elemId={frResult.elemId}  uFound={ToMmU(frResult.uFound)}мм" : "НЕ найден")}");
-            diagSb?.AppendLine($"  backRef:  {(backRef  != null ? $"найден  elemId={brResult.elemId}  uFound={ToMmU(brResult.uFound)}мм" : (Math.Abs(uMaxRebar - uMinRebar) <= rowTol ? "NULL — один ряд (uMin==uMax)" : "НЕ найден"))}");
-            if (frontRef != null && backRef != null)
-                diagSb?.AppendLine($"  sameElement: {frResult.elemId == brResult.elemId}");
+            diagSb?.AppendLine($"  hBarEdges: {hBarEdges.Count}  pshEdges: {pshEdges.Count}  itemEdges: {itemEdges.Count}  источник: {crossRefSource}");
+            diagSb?.AppendLine($"  frontRef: {(frontRef != null ? "найден" : "НЕ найден")}  backRef: {(backRef != null ? "найден" : "НЕ найден")}");
 
             // Создание размера вдоль upDir
             Dimension CreateDim(double lineW, ReferenceArray ra)
@@ -995,36 +1232,24 @@ namespace DAN_Plugin
                 CreateDim(wallWLeft - 2 * dimSpacing, ra);
             }
 
-            // 2. Цепочка: грань → перед. арматура → [оси] → задн. арматура → грань
-            //    Если осей нет — просто грань → арматура → грань
+            // 2. Отдельные размеры вместо цепочки:
+            //    а) грань → перед. арматура
+            //    б) перед. арматура → [оси] → задн. арматура  (только если есть оси)
+            //    в) задн. арматура → грань
+            double dimW2 = wallWLeft - dimSpacing;
+            // 2. Цепочка: грань → frontRef → backRef → грань
             {
                 var ra = new ReferenceArray();
                 ra.Append(faceMin.rf);
                 if (frontRef != null) ra.Append(frontRef);
-                foreach (var gr in gridRefs) ra.Append(gr.rf);
                 if (backRef  != null) ra.Append(backRef);
                 ra.Append(faceMax.rf);
                 diagSb?.AppendLine($"  dim2 ra.Size={ra.Size}");
-                Dimension dim2 = CreateDim(wallWLeft - dimSpacing, ra);
-                if (diagSb != null && dim2 != null)
-                {
-                    doc.Regenerate();
-                    var segs2 = dim2.Segments;
-                    if (segs2 != null && segs2.Size > 0)
-                    {
-                        var sb2 = new System.Text.StringBuilder("  dim2 сегменты: ");
-                        for (int i = 0; i < segs2.Size; i++)
-                            sb2.Append($"[{i}]={ToMmU(segs2.get_Item(i).Value ?? 0)}мм ");
-                        diagSb.AppendLine(sb2.ToString());
-                    }
-                    else
-                        diagSb?.AppendLine($"  dim2 Value={ToMmU(dim2.Value ?? 0)}мм (нет сегментов)");
-                }
-                else if (diagSb != null)
-                    diagSb.AppendLine("  dim2: НЕ создан");
+                CreateDim(dimW2, ra);
             }
 
-            // 3. Привязка к оси: грань → [оси] → грань (справа)
+            // 3. Привязка к оси: грань → [оси] → грань.
+            //    Две позиции: слева (wallWLeft) и справа (wallWRight).
             if (gridRefs.Any())
             {
                 var ra = new ReferenceArray();
@@ -1264,7 +1489,13 @@ namespace DAN_Plugin
                         int ib5 = sortedByFirst5[si6];
                         if (chainedIndices.Contains(ib5)) break;
                         var b5 = allArrayData[ib5];
-                        if (b5.rebar.NumberOfBarPositions != 2) break;
+                        if (b5.rebar.NumberOfBarPositions != 2)
+                        {
+                            // Пропускаем n≠2 массивы внутри окна смежности;
+                            // если уже вышли за него — дальше n=2 не найти.
+                            if (b5.wFirst > chainEnd5 + matchTol * 2) break;
+                            continue;
+                        }
                         if (Math.Abs(b5.wFirst - chainEnd5) > matchTol * 2) break;
                         double spacingB5 = Math.Abs(b5.wLast - b5.wFirst);
                         if (Math.Abs(spacingA5 - spacingB5) > matchTol * 2) break;
@@ -1607,6 +1838,122 @@ namespace DAN_Plugin
             acc.Add((rf, wCoord, uCoord));
         }
 
+        // Solid-рёбра горизонтального стержня (параллельные wallDir) без привязки к виду.
+        // Возвращает (rf, wCoord, uCoord) — wCoord вдоль стены, uCoord поперёк.
+        // Edge.Reference из нативной solid-геометрии стабильна после коммита транзакции.
+        private static List<(Reference rf, double wCoord, double uCoord)> GetHorizontalBarSolidEdgeRefs(
+            Rebar rebar, View view, XYZ wallDir, XYZ upDir)
+        {
+            var result = new List<(Reference rf, double wCoord, double uCoord)>();
+            // Сначала — геометрия без вида (иногда даёт solid Edge.Reference)
+            Options optNv = new Options { ComputeReferences = true, IncludeNonVisibleObjects = true };
+            GeometryElement geomNv = rebar.get_Geometry(optNv);
+            if (geomNv != null) CollectWallDirSolidEdgeRefs(geomNv, wallDir, upDir, result);
+            if (result.Count > 0) return result;
+            // Fallback: view-геометрия (арматура возвращает centerline Line.Reference)
+            Options optV = new Options { View = view, ComputeReferences = true, IncludeNonVisibleObjects = true };
+            GeometryElement geomV = rebar.get_Geometry(optV);
+            if (geomV != null) CollectWallDirSolidEdgeRefs(geomV, wallDir, upDir, result);
+            return result;
+        }
+
+        private static void CollectWallDirSolidEdgeRefs(
+            GeometryElement geom, XYZ wallDir, XYZ upDir,
+            List<(Reference rf, double wCoord, double uCoord)> acc,
+            bool solidOnly = false)
+        {
+            foreach (GeometryObject obj in geom)
+            {
+                if (obj is GeometryInstance gi)
+                {
+                    CollectWallDirSolidEdgeRefs(gi.GetInstanceGeometry(), wallDir, upDir, acc, solidOnly);
+                    continue;
+                }
+                // Solid edges (Edge.Reference — настоящие грани)
+                if (obj is Solid solid && solid.Edges.Size > 0)
+                {
+                    foreach (Edge e in solid.Edges)
+                    {
+                        if (e.Reference == null) continue;
+                        if (!(e.AsCurve() is Line el)) continue;
+                        if (Math.Abs(el.Direction.Normalize().DotProduct(wallDir)) < 0.99) continue;
+                        XYZ p0 = el.GetEndPoint(0);
+                        acc.Add((e.Reference, p0.DotProduct(wallDir), p0.DotProduct(upDir)));
+                    }
+                    continue;
+                }
+                // Line centerline — только если solidOnly = false
+                if (!solidOnly && obj is Line ln && ln.Reference != null)
+                {
+                    if (Math.Abs(ln.Direction.Normalize().DotProduct(wallDir)) < 0.99) continue;
+                    XYZ p0 = ln.GetEndPoint(0);
+                    acc.Add((ln.Reference, p0.DotProduct(wallDir), p0.DotProduct(upDir)));
+                }
+            }
+        }
+
+        // Рёбра параллельные wallDir (для горизонтальных стержней и П-шек).
+        // Возвращает (Reference, uCoord) — позицию ребра вдоль upDir.
+        private static List<(Reference rf, double uCoord)> GetHorizontalBarLineRefs(
+            Rebar rebar, View view, XYZ wallDir, XYZ upDir)
+        {
+            var result = new List<(Reference rf, double uCoord)>();
+            Options opt = new Options
+            {
+                View = view,
+                ComputeReferences = true,
+                IncludeNonVisibleObjects = true
+            };
+            GeometryElement geom = rebar.get_Geometry(opt);
+            if (geom != null)
+                CollectWallDirLineRefs(geom, wallDir, upDir, result);
+            if (result.Count == 0)
+            {
+                Options optNv = new Options { ComputeReferences = true, IncludeNonVisibleObjects = true };
+                GeometryElement geomNv = rebar.get_Geometry(optNv);
+                if (geomNv != null)
+                    CollectWallDirLineRefs(geomNv, wallDir, upDir, result);
+            }
+            return result;
+        }
+
+        private static void CollectWallDirLineRefs(
+            GeometryElement geom, XYZ wallDir, XYZ upDir,
+            List<(Reference rf, double uCoord)> acc)
+        {
+            foreach (GeometryObject obj in geom)
+            {
+                if (obj is GeometryInstance gi)
+                {
+                    CollectWallDirLineRefs(gi.GetInstanceGeometry(), wallDir, upDir, acc);
+                    continue;
+                }
+                if (obj is Line ln && ln.Reference != null)
+                {
+                    TryAddWallDirLineRef(ln, ln.Reference, wallDir, upDir, acc);
+                    continue;
+                }
+                if (obj is Solid solid && solid.Edges.Size > 0)
+                {
+                    foreach (Edge e in solid.Edges)
+                    {
+                        if (e.AsCurve() is Line el && e.Reference != null)
+                            TryAddWallDirLineRef(el, e.Reference, wallDir, upDir, acc);
+                    }
+                }
+            }
+        }
+
+        private static void TryAddWallDirLineRef(
+            Line ln, Reference rf, XYZ wallDir, XYZ upDir,
+            List<(Reference rf, double uCoord)> acc)
+        {
+            if (rf == null) return;
+            if (Math.Abs(ln.Direction.Normalize().DotProduct(wallDir)) < 0.99) return;
+            double uCoord = ln.GetEndPoint(0).DotProduct(upDir);
+            acc.Add((rf, uCoord));
+        }
+
         private static Reference GetTagRef(Rebar rebar)
         {
             if (rebar == null) return null;
@@ -1618,13 +1965,14 @@ namespace DAN_Plugin
         }
 
         // ── Марки горизонтальных стержней формы 1 (верхний / нижний) ────────
+        // При наличии проёма — отдельно для каждой секции стены.
         // Выноска: вертикально вверх (100 мм) → горизонтальная полка вправо (200 мм).
-        // Оба тега над дальней гранью стены, по W в одном месте.
         private static void PlaceHorizontalBarTags(
             Document doc, ViewSection sectionView,
             XYZ wallDir, XYZ upDir, double cutZ,
             Line wallLine,
-            List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)> hItems)
+            List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)> hItems,
+            List<(double wLeft, double wRight)> wallSegments)
         {
             if (!hItems.Any()) return;
 
@@ -1637,56 +1985,106 @@ namespace DAN_Plugin
             if (tagTick == null) return;
             if (!tagTick.IsActive) tagTick.Activate();
 
-            // wallDir × upDir — оба горизонтальны, их крест = вертикаль (Z).
-            // Полка идёт вправо в плане = в направлении wallDir.
             XYZ MakePt(double w, double u) =>
                 wallDir.Multiply(w) + upDir.Multiply(u) + XYZ.BasisZ.Multiply(cutZ);
 
-            double tagW = hItems.Average(r => r.wProj);
+            double vertLen  = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+            double shelfLen = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters);
 
-            // "Выше" = уменьшение u (upDir = -Y, уменьшение u → бо́льший Y → дальняя грань и за ней).
-            double wallMinU  = hItems.Min(r => r.uProj);
-            double vertLen   = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters); // вертикальная часть
-            double shelfLen  = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters); // горизонтальная полка
-            double tagGap    = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters); // зазор между двумя марками
+            // Группируем стержни по секциям стены; без проёма — одна группа
+            var groups = wallSegments.Count >= 2
+                ? wallSegments
+                    .Select(seg => hItems
+                        .Where(r => r.wProj >= seg.wLeft - 1e-4 && r.wProj <= seg.wRight + 1e-4)
+                        .ToList())
+                    .Where(g => g.Count > 0)
+                    .ToList()
+                : new List<List<(Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj)>> { hItems };
 
-            // farBar  = дальняя грань (выше в плане, меньший u)
-            // nearBar = ближняя грань (ниже в плане, больший u)
-            var farBar  = hItems.OrderBy(r => r.uProj).First();
-            var nearBar = hItems.OrderByDescending(r => r.uProj).First();
-
-            // Локальная функция: размещает один тег с полкой вправо.
-            // elbowU — U-координата излома (конец вертикали / начало полки).
-            void PlaceTagWithShelf(
-                (Element elem, Reference tagRef, int pos, double diam, double wProj, double uProj) bar,
-                double elbowU)
+            foreach (var group in groups)
             {
-                XYZ anchor  = MakePt(tagW,             bar.uProj); // засечка на стержне
-                XYZ elbow   = MakePt(tagW,             elbowU);    // излом: вертикаль → полка
-                XYZ tagHead = MakePt(tagW + shelfLen,  elbowU);    // конец полки = голова тега
-                try
+                // Наружная грань всей группы — все марки выводятся сверху к этому уровню
+                double outerU = group.Min(r => r.uProj);
+                double elbowU = outerU - vertLen;
+
+                // Одна марка на каждую (pos, diam), сортировка по номеру позиции (по возрастанию)
+                var byPosDiam = group
+                    .GroupBy(r => (r.pos, Math.Round(r.diam, 4)))
+                    .Select(g => new {
+                        Rep  = g.OrderBy(r => r.uProj).First(),   // наружный стержень
+                        AvgW = g.Average(r => r.wProj)
+                    })
+                    .OrderBy(x => x.Rep.pos)   // по номеру позиции
+                    .ToList();
+
+                // Равномерно расставляем теги по возрастанию позиции.
+                // Центр группы тегов совпадает с центром группы стержней.
+                int    n         = byPosDiam.Count;
+                double centreW   = group.Average(r => r.wProj);
+                double tagStep   = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+                double startW    = n == 1 ? byPosDiam[0].AvgW : centreW - (n - 1) * tagStep / 2.0;
+
+                for (int ti = 0; ti < n; ti++)
                 {
-                    var tag = IndependentTag.Create(doc, tagTick.Id, sectionView.Id,
-                        bar.tagRef, true, TagOrientation.Horizontal, tagHead);
-                    tag.LeaderEndCondition = LeaderEndCondition.Free;
-                    tag.SetLeaderEnd(bar.tagRef, anchor);
-                    tag.SetLeaderElbow(bar.tagRef, elbow);
-                    tag.TagHeadPosition = tagHead;
+                    var item    = byPosDiam[ti];
+                    double elbW = startW + ti * tagStep;
+                    XYZ anchor  = MakePt(item.AvgW, outerU);
+                    XYZ elbow   = MakePt(elbW, elbowU);
+                    XYZ tagHead = MakePt(elbW + shelfLen, elbowU);
+                    try
+                    {
+                        var tag = IndependentTag.Create(doc, tagTick.Id, sectionView.Id,
+                            item.Rep.tagRef, true, TagOrientation.Horizontal, tagHead);
+                        tag.LeaderEndCondition = LeaderEndCondition.Free;
+                        tag.SetLeaderEnd(item.Rep.tagRef, anchor);
+                        tag.SetLeaderElbow(item.Rep.tagRef, elbow);
+                        tag.TagHeadPosition = tagHead;
+                    }
+                    catch { }
                 }
-                catch { }
             }
+        }
 
-            // Оба тега на одной высоте — излом на wallMinU - vertLen
-            double sharedElbowU = wallMinU - vertLen;
-
-            PlaceTagWithShelf(farBar, sharedElbowU);
-            if (nearBar.elem.UniqueId != farBar.elem.UniqueId)
-                PlaceTagWithShelf(nearBar, sharedElbowU);
+        private static List<(double wLeft, double wRight)> GetWallSegments(
+            Wall wall, ViewSection sectionView, XYZ wallDir)
+        {
+            var coords = new List<double>();
+            Options opt = new Options { View = sectionView, ComputeReferences = true };
+            GeometryElement geom = wall.get_Geometry(opt);
+            if (geom != null)
+            {
+                foreach (GeometryObject obj in geom)
+                {
+                    Solid s = obj as Solid;
+                    if (s == null || s.Faces.Size == 0) continue;
+                    foreach (Face f in s.Faces)
+                    {
+                        PlanarFace pf = f as PlanarFace;
+                        if (pf == null) continue;
+                        if (Math.Abs(pf.FaceNormal.Normalize().DotProduct(wallDir)) < 0.99) continue;
+                        if (!FaceOverlapsCrop(sectionView, pf)) continue;
+                        double coord = pf.Origin.DotProduct(wallDir);
+                        if (!coords.Any(c => Math.Abs(c - coord) < 1e-4))
+                            coords.Add(coord);
+                    }
+                }
+            }
+            coords.Sort();
+            var segments = new List<(double wLeft, double wRight)>();
+            for (int i = 0; i + 1 < coords.Count; i += 2)
+                segments.Add((coords[i], coords[i + 1]));
+            return segments;
         }
 
         private class WallFilter : ISelectionFilter
         {
             public bool AllowElement(Element elem) => elem is Wall;
+            public bool AllowReference(Reference reference, XYZ position) => false;
+        }
+
+        private class AssemblyFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem) => elem is AssemblyInstance;
             public bool AllowReference(Reference reference, XYZ position) => false;
         }
     }

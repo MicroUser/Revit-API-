@@ -11,7 +11,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.Revit.DB;
-// using Autodesk.Revit.UI; -- убрано: конфликт TextBox/Visibility; UIDocument используется только через var
+// using Autodesk.Revit.UI; -- убрано: конфликт TextBox/ComboBox/Visibility; UIDocument используется только через var
 
 namespace KzhNotes
 {
@@ -51,17 +51,14 @@ namespace KzhNotes
         private readonly ObservableCollection<ItemVM> _items = new ObservableCollection<ItemVM>();
         private List<NoteSet> _sets = new List<NoteSet>();
 
-        private static string SetsPath
-        {
-            get
-            {
-                string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                return Path.Combine(dir, "note_sets.json");
-            }
-        }
+        private readonly string _dataPath;
 
-        public NotesWindow(RevitEventBridge bridge)
+        public NotesWindow(RevitEventBridge bridge, string projectDir = null, string projectStem = null)
         {
+            string dir      = !string.IsNullOrEmpty(projectDir)  ? projectDir  : PluginDir();
+            string fileName = !string.IsNullOrEmpty(projectStem) ? projectStem + "_kzh.json" : "kzh_data.json";
+            _dataPath = Path.Combine(dir, fileName);
+
             _bridge = bridge;
             InitializeComponent();
 
@@ -92,7 +89,8 @@ namespace KzhNotes
                 src = src.Where(p => p.Group == grp);
             if (q.Length > 0)
                 src = src.Where(p => (p.Body ?? "").ToLowerInvariant().Contains(q)
-                                   || (p.Id ?? "").ToLowerInvariant().Contains(q));
+                                   || (p.Id ?? "").ToLowerInvariant().Contains(q)
+                                   || (p.Hint ?? "").ToLowerInvariant().Contains(q));
 
             lstLibrary.ItemsSource = src.Select(p => new LibVM(p)).ToList();
         }
@@ -157,14 +155,38 @@ namespace KzhNotes
                 string key = fd.Name;
                 string val;
                 vm.Item.Fields.TryGetValue(key, out val);
-                var tb = new TextBox { Text = val ?? "" };
-                tb.TextChanged += (s, a) =>
-                {
-                    vm.Item.Fields[key] = ((TextBox)s).Text;
-                    RefreshPreview();
-                };
                 row.Children.Add(lbl);
-                row.Children.Add(tb);
+
+                List<string> options = fd.Options;
+                if (!string.IsNullOrEmpty(fd.MarkFamily))
+                {
+                    var marks = _snapshot.Where(s => s.Family == fd.MarkFamily && s.Mark != null)
+                                          .Select(s => s.Mark).Distinct()
+                                          .OrderBy(m => m, StringComparer.OrdinalIgnoreCase).ToList();
+                    if (marks.Count > 0) options = marks;
+                }
+
+                if (options != null && options.Count > 0)
+                {
+                    var cb = new ComboBox { IsEditable = true, ItemsSource = options, Text = val ?? "" };
+                    cb.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+                        new TextChangedEventHandler((s, a) =>
+                        {
+                            vm.Item.Fields[key] = cb.Text;
+                            RefreshPreview();
+                        }));
+                    row.Children.Add(cb);
+                }
+                else
+                {
+                    var tb = new TextBox { Text = val ?? "" };
+                    tb.TextChanged += (s, a) =>
+                    {
+                        vm.Item.Fields[key] = ((TextBox)s).Text;
+                        RefreshPreview();
+                    };
+                    row.Children.Add(tb);
+                }
                 pnlFields.Children.Add(row);
             }
         }
@@ -210,7 +232,7 @@ namespace KzhNotes
         // ---------- наборы ----------
         private void LoadSets()
         {
-            _sets = NoteSetStore.Load(SetsPath);
+            _sets = NoteSetStore.Load(_dataPath);
             cboSets.ItemsSource = _sets;
             if (_sets.Count > 0) cboSets.SelectedIndex = 0;
         }
@@ -231,10 +253,42 @@ namespace KzhNotes
 
             _sets.RemoveAll(s => s.Name == name);
             _sets.Add(set);
-            NoteSetStore.Save(SetsPath, _sets);
+            NoteSetStore.Save(_dataPath, _sets);
             cboSets.ItemsSource = null; cboSets.ItemsSource = _sets;
             cboSets.SelectedItem = set;
             MessageBox.Show("Набор «" + name + "» сохранён.");
+        }
+
+        private void btnImportSets_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Импорт наборов примечаний",
+                Filter = "JSON файлы (*.json)|*.json|Все файлы (*.*)|*.*",
+                CheckFileExists = true
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            List<NoteSet> imported;
+            try { imported = NoteSetStore.Load(dlg.FileName); }
+            catch (Exception ex) { MessageBox.Show("Не удалось прочитать файл:\n" + ex.Message); return; }
+
+            if (imported == null || imported.Count == 0)
+            { MessageBox.Show("В выбранном файле наборов не найдено."); return; }
+
+            int added = 0, replaced = 0;
+            foreach (var imp in imported)
+            {
+                int idx = _sets.FindIndex(s => s.Name == imp.Name);
+                if (idx >= 0) { _sets[idx] = imp; replaced++; }
+                else { _sets.Add(imp); added++; }
+            }
+
+            NoteSetStore.Save(_dataPath, _sets);
+            cboSets.ItemsSource = null;
+            cboSets.ItemsSource = _sets;
+            if (_sets.Count > 0) cboSets.SelectedIndex = 0;
+            MessageBox.Show($"Импортировано: {added} новых, {replaced} обновлено.");
         }
 
         private void btnApplySet_Click(object sender, RoutedEventArgs e)
@@ -353,6 +407,20 @@ namespace KzhNotes
             MessageBox.Show(msg, title);
             // после записи полезно перечитать снимок (номера могли поменяться в др. сессии)
             RefreshPreview();
+        }
+
+        private static string PluginDir()
+        {
+            // Loader.dll всегда лежит в реальной папке плагина; DAN_Plugin.dll — shadow-copy в temp
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.GetName().Name == "Loader")
+                {
+                    string loc = asm.Location;
+                    if (!string.IsNullOrEmpty(loc)) return Path.GetDirectoryName(loc);
+                }
+            }
+            return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         }
     }
 }

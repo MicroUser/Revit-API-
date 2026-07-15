@@ -4,11 +4,11 @@
 // поэтому тестируется отдельно и вызывается из UI мгновенно.
 //
 // Токены в теле пункта:
-//   {{МАРКА}}                                         -> полная марка листа (СНм-4)
+//   {{МАРКА}}                                         -> полная марка листа (СТ-4)
 //   {{ПОЛЕ n="класс"}}                                -> значение поля, введённое пользователем
 //   {{КЖ role="Спецификация" excl="Выпуски"}}         -> ссылка по марке текущего листа
 //   {{КЖ role="Общие указания..." scope="global"}}    -> глобальная ссылка (может дать диапазон)
-//   {{КЖ role="..." scope="mark:СНм-1"}}              -> ссылка на конкретную чужую марку
+//   {{КЖ role="..." scope="mark:СТ-1"}}              -> ссылка на конкретную чужую марку
 //   {{СОВМЕСТНО}}                                      -> "листом/листами КЖ-.." (та же марка, без себя)
 //   {{СЕЧЕНИЯ}}                                        -> авто-сборка сечений (только стены)
 
@@ -25,9 +25,9 @@ namespace KzhNotes
     public sealed class SheetInfo
     {
         public string Number { get; set; }   // "017"
-        public string Name { get; set; }     // "Стена СНм-4. Опалубка"
-        public string Mark { get; private set; }   // "СНм-4"  (первая марка после слова-элемента)
-        public string Family { get; private set; } // "СНМ"
+        public string Name { get; set; }     // "Стена СТ-4. Опалубка"
+        public string Mark { get; private set; }   // "СТ-4"  (первая марка после слова-элемента)
+        public string Family { get; private set; } // "СТ"
 
         public SheetInfo(string number, string name)
         {
@@ -49,13 +49,14 @@ namespace KzhNotes
         // Полный белый список префиксов проекта.
         public static readonly string[] Prefixes = new[]
         {
-            "РТЛм","ППГм","ПРПм","ПРМм","КПТм","БФм","РТм","ЛМм","ЛПм","СЦм","СНм",
-            "СЖм","СШм","ФЛм","КРм","СТм","РМм","Км","Пм","Фм","Бм","Бл","Л"
+            "РТЛм","ППГм","ПРПм","ПРМм","КПТм","БФм","РТм","ЛМм","ЛПм",
+            "СНм","СЖм","СЦм","СШм","ФЛм","КРм","РМм","Км","Пм","Фм","Бм","Бл","Л"
         };
 
         // Семейства-стены (для правила сечений — только они).
         public static readonly HashSet<string> WallFamilies =
-            new HashSet<string>(new[] { "СНМ", "СШМ", "СЖМ", "СЦМ", "СТМ" });
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "СНм", "СЖм", "СЦм", "СШм", "ПРПм" };
 
         private static readonly Regex MarkRe = BuildMarkRegex();
 
@@ -67,7 +68,7 @@ namespace KzhNotes
             return new Regex(pat, RegexOptions.Compiled);
         }
 
-        /// <summary>Полная марка ("СНм-4") или null.</summary>
+        /// <summary>Полная марка ("СТ-4") или null.</summary>
         public static string FullMark(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
@@ -75,7 +76,7 @@ namespace KzhNotes
             return m.Success ? m.Groups[1].Value + "-" + m.Groups[2].Value : null;
         }
 
-        /// <summary>Семейство ("СНМ") из полной марки.</summary>
+        /// <summary>Семейство ("СТ") из полной марки.</summary>
         public static string Family(string fullMark)
         {
             if (string.IsNullOrEmpty(fullMark)) return null;
@@ -96,7 +97,7 @@ namespace KzhNotes
     /// <summary>Один пункт-экземпляр в составе листа: ID из библиотеки + значения полей.</summary>
     public sealed class NoteItem
     {
-        public string LibraryId { get; set; }                 // трассировка, напр. "СНМ-08"
+        public string LibraryId { get; set; }                 // трассировка, напр. "СТ-08"
         public string Template { get; set; }                  // тело с токенами
         public Dictionary<string, string> Fields { get; set; } // значения полей пользователя
 
@@ -117,7 +118,7 @@ namespace KzhNotes
         private static readonly Regex ArgRe =
             new Regex("(\\w+)=\"([^\"]*)\"", RegexOptions.Compiled);
         private static readonly Regex SecWord =
-            new Regex(@"(?<![а-яё])сечени", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            new Regex(@"(?<![а-яё])(сечени|разрез)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex SecPair =
             new Regex(@"(\d+)\s*-\s*(\d+)", RegexOptions.Compiled);
         private static readonly Regex LetterPair =
@@ -144,10 +145,20 @@ namespace KzhNotes
             return sb.ToString().Trim();
         }
 
-        private static string Kz(string number)  // "017" -> "КЖ-17"
+        // "007и" -> numPart=7, suffix="и"; "017" -> numPart=17, suffix=""
+        private static void ParseNumber(string n, out int numPart, out string suffix)
         {
-            int v; int.TryParse(number, out v);
-            return "КЖ-" + v.ToString(CultureInfo.InvariantCulture);
+            int i = 0;
+            while (i < n.Length && char.IsDigit(n[i])) i++;
+            suffix = n.Substring(i);
+            int.TryParse(n.Substring(0, i), out numPart);
+        }
+
+        private static string Kz(string number)  // "017" -> "КЖ-17", "007и" -> "КЖ-7и"
+        {
+            int v; string suf;
+            ParseNumber(number, out v, out suf);
+            return "КЖ-" + v.ToString(CultureInfo.InvariantCulture) + suf;
         }
 
         private IEnumerable<SheetInfo> OfMark(string mark)
@@ -155,25 +166,38 @@ namespace KzhNotes
             return _sheets.Where(s => s.Mark == mark);
         }
 
-        /// <summary>Форматирование набора номеров: непрерывный ряд ≥3 → "КЖ-a ... b", иначе список через "; ".</summary>
+        /// <summary>Форматирование набора номеров: непрерывный ряд ≥3 → "КЖ-a ... b", иначе список через "; ".
+        /// Номера с буквенным суффиксом (напр. "007и") не входят в диапазоны и выводятся отдельно.</summary>
         private static string FormatRange(IEnumerable<string> numbers)
         {
-            var ints = numbers.Select(n => { int v; int.TryParse(n, out v); return v; })
-                              .Distinct().OrderBy(v => v).ToList();
-            if (ints.Count == 0) return "";
+            var plainNums = new List<int>();
+            var suffixedKz = new List<string>();
+            foreach (var n in numbers.Distinct())
+            {
+                int v; string suf;
+                ParseNumber(n, out v, out suf);
+                if (suf.Length == 0) plainNums.Add(v);
+                else suffixedKz.Add("КЖ-" + v.ToString(CultureInfo.InvariantCulture) + suf);
+            }
+
+            plainNums = plainNums.Distinct().OrderBy(v => v).ToList();
+            suffixedKz = suffixedKz.OrderBy(x => x).ToList();
+
             var pieces = new List<string>();
             int i = 0;
-            while (i < ints.Count)
+            while (i < plainNums.Count)
             {
                 int j = i;
-                while (j + 1 < ints.Count && ints[j + 1] == ints[j] + 1) j++;
+                while (j + 1 < plainNums.Count && plainNums[j + 1] == plainNums[j] + 1) j++;
                 int runLen = j - i + 1;
                 if (runLen >= 3)
-                    pieces.Add("КЖ-" + ints[i] + " ... " + ints[j]);
+                    pieces.Add("КЖ-" + plainNums[i] + " ... " + plainNums[j]);
                 else
-                    for (int k = i; k <= j; k++) pieces.Add("КЖ-" + ints[k]);
+                    for (int k = i; k <= j; k++) pieces.Add("КЖ-" + plainNums[k]);
                 i = j + 1;
             }
+            pieces.AddRange(suffixedKz);
+            if (pieces.Count == 0) return "";
             return string.Join("; ", pieces);
         }
 
@@ -199,35 +223,64 @@ namespace KzhNotes
             return FormatRange(cand.Select(s => s.Number)); // глобальный набор → диапазон/список
         }
 
-        /// <summary>{{СОВМЕСТНО}} — листы той же марки, кроме текущего; "листом/листами КЖ-..".</summary>
+        /// <summary>Имённые группы для {{СОВМЕСТНО}} на листах БЕЗ марки
+        /// (каркасные схемы и т.п.): если имя листа содержит фразу — группируем по ней.</summary>
+        public static readonly string[] SovmestnoGroupPhrases = new[]
+        {
+            "Схема расположения элементов каркаса"
+
+        };
+
+        /// <summary>{{СОВМЕСТНО}} — листы той же марки (или той же имённой группы для листов без марки),
+        /// кроме текущего; "листом/листами КЖ-..".</summary>
         public string ResolveSovmestno(SheetInfo cur)
         {
-            if (cur.Mark == null) return null;
-            var others = OfMark(cur.Mark).Where(s => s.Number != cur.Number)
+            List<SheetInfo> others;
+            if (cur.Mark != null)
+            {
+                others = OfMark(cur.Mark).Where(s => s.Number != cur.Number)
                                          .OrderBy(s => s.NumberInt).ToList();
+            }
+            else
+            {
+                // лист без марки — пробуем имённую группу (напр. «Схема расположения элементов каркаса»)
+                string curN = Norm(cur.Name);
+                string phrase = SovmestnoGroupPhrases.FirstOrDefault(p => curN.Contains(Norm(p)));
+                if (phrase == null) return null;
+                string phN = Norm(phrase);
+                others = _sheets.Where(s => s.Number != cur.Number && Norm(s.Name).Contains(phN))
+                                .OrderBy(s => s.NumberInt).ToList();
+            }
             if (others.Count == 0) return null;
             string prep = others.Count == 1 ? "листом" : "листами";
             return prep + " " + FormatRange(others.Select(s => s.Number));
         }
 
-        /// <summary>{{СЕЧЕНИЯ}} — авто-сборка (ТОЛЬКО стены): диапазон сечений + список листов.</summary>
+        /// <summary>{{СЕЧЕНИЯ}} — авто-сборка: диапазон сечений + список листов для текущей марки.</summary>
         public string ResolveSechenia(SheetInfo cur)
         {
-            if (cur.Family == null || !MarkParser.WallFamilies.Contains(cur.Family)) return null;
+            if (cur.Mark == null) return null;
 
             var secSheets = OfMark(cur.Mark).Where(s => SecWord.IsMatch(s.Name)).ToList();
             var use = new List<string>();
             var pairs = new List<Tuple<int, int>>();
+            bool hasRazrez = false;
             foreach (var s in secSheets)
             {
+                var wordMatch = SecWord.Match(s.Name);
+                if (wordMatch.Success &&
+                    wordMatch.Groups[1].Value.StartsWith("р", StringComparison.OrdinalIgnoreCase))
+                    hasRazrez = true;
+
                 var nums = SecPair.Matches(s.Name).Cast<Match>()
                     .Select(m => Tuple.Create(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)))
                     .Where(t => t.Item1 <= 30 && t.Item2 <= 30).ToList();
                 if (nums.Count > 0) { use.Add(s.Number); pairs.AddRange(nums); }
-                else if (LetterPair.IsMatch(s.Name)) continue;      // только буквенные — игнор
-                else use.Add(s.Number);                             // "Сечения" без номеров — только в список
+                else if (LetterPair.IsMatch(s.Name)) continue;
+                else use.Add(s.Number);
             }
             if (use.Count == 0) return null;
+            string noun = hasRazrez ? "разрезы" : "сечения";
             string prep = use.Distinct().Count() == 1 ? "листе" : "листах";
             string body = FormatRange(use);
             if (pairs.Count > 0)
@@ -237,9 +290,9 @@ namespace KzhNotes
                 string st = lo.Equals(hi)
                     ? string.Format("{0}-{1}", lo.Item1, lo.Item2)
                     : string.Format("{0}-{1} ... {2}-{3}", lo.Item1, lo.Item2, hi.Item1, hi.Item2);
-                return "Сечения " + st + " разработаны на " + prep + " " + body;
+                return noun + " " + st + " разработаны на " + prep + " " + body;
             }
-            return "Сечения разработаны на " + prep + " " + body;
+            return noun + " разработаны на " + prep + " " + body;
         }
 
         // ---------- рендер одного пункта ----------
@@ -270,14 +323,33 @@ namespace KzhNotes
                         if (val == null) warnings.Add("Нет других листов марки " + (cur.Mark ?? "?"));
                         return val ?? "листами КЖ-??";
                     case "КЖ":
-                        val = ResolveKz(cur,
-                            args.ContainsKey("role") ? args["role"] : "",
-                            args.ContainsKey("scope") ? args["scope"] : "mark",
-                            args.ContainsKey("excl") ? args["excl"] : "");
+                    {
+                        // {fieldName} внутри аргументов КЖ заменяется значением поля пользователя
+                        var flds = item.Fields;
+                        System.Func<string, string> sf = a =>
+                            Regex.Replace(a, @"\{(\w+)\}", mm =>
+                            {
+                                string fv; return flds.TryGetValue(mm.Groups[1].Value, out fv) ? fv : mm.Value;
+                            });
+                        string kzRole  = sf(args.ContainsKey("role")  ? args["role"]  : "");
+                        string kzScope = sf(args.ContainsKey("scope") ? args["scope"] : "mark");
+                        if (kzScope.Length == 0) kzScope = "mark";
+                        string kzExcl  = sf(args.ContainsKey("excl")  ? args["excl"]  : "");
+                        val = ResolveKz(cur, kzRole, kzScope, kzExcl);
                         if (val == null)
-                            warnings.Add("Ссылка не разрешена: role=\"" +
-                                (args.ContainsKey("role") ? args["role"] : "") + "\"");
-                        return val ?? "КЖ-??";
+                        {
+                            warnings.Add("Ссылка не разрешена: role=\"" + kzRole + "\"");
+                            return "КЖ-??";
+                        }
+                        // prep="лист" -> добавить "листе"/"листах" по числу листов (одно vs диапазон/список)
+                        if (args.ContainsKey("prep") && args["prep"].Length > 0)
+                        {
+                            bool many = val.Contains("...") || val.Contains(";");
+                            string stem = args["prep"];               // "лист"
+                            val = (many ? stem + "ах" : stem + "е") + " " + val;
+                        }
+                        return val;
+                    }
                     default:
                         return "??";
                 }
@@ -292,7 +364,10 @@ namespace KzhNotes
             for (int i = 0; i < items.Count; i++)
             {
                 if (i > 0) sb.Append("\r\n");
-                sb.Append(i + 1).Append(". ").Append(RenderItem(items[i], cur, res.Warnings));
+                string rendered = RenderItem(items[i], cur, res.Warnings);
+                if (rendered.Length > 0)
+                    rendered = char.ToUpperInvariant(rendered[0]) + rendered.Substring(1);
+                sb.Append(i + 1).Append(". ").Append(rendered);
             }
             res.Text = sb.ToString();
             return res;

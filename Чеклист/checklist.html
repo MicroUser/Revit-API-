@@ -133,6 +133,13 @@ body[data-role="executor"] #step1 input{pointer-events:none;background:#f5f5f5;c
 body[data-role="executor"] .btn[onclick="refreshFromModel()"]{pointer-events:none;opacity:.4}
 /* Исполнитель не редактирует текст пунктов */
 body[data-role="executor"] #step2 .edt{pointer-events:none}
+/* Исполнитель не выбирает ответственных и не редактирует примечания */
+body[data-role="executor"] #step2 .rsel,
+body[data-role="executor"] #step2 .mrsel{pointer-events:none;opacity:.55;background:#f5f5f5}
+body[data-role="executor"] #step2 .noi{pointer-events:none;background:#f5f5f5;color:var(--gx)}
+/* Фильтр по ответственному */
+.resp-filter-sel{border:1px solid var(--br);border-radius:4px;padding:3px 6px;font-size:11px;font-family:Arial,sans-serif;color:var(--tx);background:#fff;cursor:pointer}
+.resp-filter-sel:focus{outline:none;border-color:var(--bm)}
 
 /* INVENTORY */
 .inv-sec{padding:14px 20px;border-bottom:1px solid var(--br)}
@@ -318,6 +325,10 @@ body[data-role="executor"] #step2 .edt{pointer-events:none}
     <button class="btn" onclick="resetAll()">↺ Сброс</button>
     <button class="btn green" onclick="printReport()">🖨 Печать</button>
     <button class="btn" onclick="exportXLSX()">↓ Excel</button>
+    <span style="border-left:1px solid var(--br);padding-left:8px;margin-left:4px;color:var(--gx);font-size:11px">Ответственный:</span>
+    <select id="resp-filter" class="resp-filter-sel" onchange="filterByResp(this.value)">
+      <option value="">— все —</option>
+    </select>
     <div class="stats">
       <div class="stat"><div class="dot dok"></div><span class="sn" id="cnt-ok">0</span> ОК</div>
       <div class="stat"><div class="dot dfail"></div><span class="sn" id="cnt-fail">0</span> Замечание</div>
@@ -434,13 +445,70 @@ body[data-role="executor"] #step2 .edt{pointer-events:none}
 
 <script>
 // ══════════ ДАННЫЕ ══════════
-const MARK_TEMPLATE = [
-  "Смоделировано правильно",
-  "Опалубка оформлена",
-  "Армирование правильное",
-  "Армирование оформлено",
-  "Спецификация оформлена",
-];
+const MARK_TEMPLATES = {
+  found: [
+    "Опалубочный вид: оси, отметки верха, размеры ступеней, привязки",
+    "Глубина заложения соответствует ИГ-разрезу (ниже промерзания и УГВ)",
+    "Армирование нижней и верхней зон (X и Y): диаметры, шаг, позиции",
+    "Дополнительное армирование верхней зоны под колоннами/стенами",
+    "Стыковка внахлёст: длина ≥1/4 пролёта от опор, схема приведена",
+    "Выпуски в колонны/стены: длина анкеровки ≥ расчётной, позиции указаны",
+    "Подготовка из бетона С8/10 h=100 мм: выход 100 мм — показан на разрезах",
+    "Гидроизоляция боковых поверхностей (мастика 2 раза) — показана",
+    "Приямки ВК: размеры, отметки дна, армирование, привязка к осям",
+    "Спецификация СА",
+    "Спецификация ВД",
+    "Спецификация ВМ",
+  ],
+  walls: [
+    "Опалубочные виды: толщина, высота, привязка, проёмы совпадают с КР",
+    "Армирование (горизонт. и верт. сетки): диаметры, шаг, класс — для каждого участка",
+    "Выпуски из нижнего этажа / фундамента: длины, диаметры, позиции",
+    "Стыки вертикальной арматуры: ≤50% в одном сечении, нахлёст ≥40d",
+    "Конструктивное армирование у проёмов (скрытые перемычки, усиление углов)",
+    "Защитный слой: ≥20 мм внутренние, ≥30 мм подземные",
+    "Спецификация СА",
+    "Спецификация ВД",
+    "Спецификация ВМ",
+  ],
+  slabs: [
+    "Опалубочный вид: пролёты, отметки низа, опорные контуры, отверстия",
+    "Нижняя зона X и Y: отдельные чертежи, диаметры, шаг, длины стержней",
+    "Верхняя зона: длины консолей от граней опор ≥1/4 пролёта",
+    "Дополнительное армирование у отверстий >300 мм (обрамление, диагональные сетки)",
+    "Толщина плиты ≥1/30 меньшего пролёта и ≥150 мм",
+    "Узлы опирания: длина опирания ≥ норм., анкеровка нижней арматуры в опоре",
+    "Спецификация СА",
+    "Спецификация ВД",
+    "Спецификация ВМ",
+  ],
+  cols: [
+    "Опалубочные виды: сечения для каждого яруса, высота, привязка",
+    "Продольное армирование: количество, диаметры, класс, симметричность",
+    "Хомуты: шаг нормальный и сгущённый у опор",
+    "Выпуски из нижнего яруса / фундамента: длина анкеровки, диаметры",
+    "Спецификация СА",
+    "Спецификация ВД",
+    "Спецификация ВМ",
+  ],
+  beams: [
+    "Опалубочные виды: сечения, отметки верха, привязка",
+    "Продольное армирование: количество, диаметры, класс, симметричность",
+    "Хомуты: шаг нормальный и сгущённый у опор",
+    "Спецификация СА",
+    "Спецификация ВД",
+    "Спецификация ВМ",
+  ],
+  stairs: [
+    "Опалубочные виды: размеры ступеней, толщина плиты, опоры",
+    "Армирование маршей: нижняя и верхняя зоны, диаметры, шаг",
+    "Армирование площадок (ЛП): схемы, опирание на стены / балки",
+    "Узлы сопряжения маршей с площадками: зазоры и анкеровка",
+    "Спецификация СА",
+    "Спецификация ВД",
+    "Спецификация ВМ",
+  ],
+};
 
 const SECTIONS = [
   {k:'general', name:"ОБЩИЕ ДАННЫЕ И ОФОРМЛЕНИЕ", type:'general', items:[
@@ -448,7 +516,7 @@ const SECTIONS = [
     "Ведомость рабочих чертежей: все листы пронумерованы, наименования совпадают с содержанием",
     "Ведомость ссылочных и прилагаемых документов заполнена (СП, ГОСТ, ТКП)",
     "Основные надписи на всех листах: шифр, ФИО, подписи, даты заполнены",
-    "Масштабы: планы — 1:100/1:200, узлы — 1:20/1:50",
+    "МаСТтабы: планы — 1:100/1:200, узлы — 1:20/1:50",
     "Шифры листов соответствуют ведомости (нет пропусков и дублей)",
     "Лист ОД-1: класс бетона, класс арматуры, нагрузки, требования к бетонированию",
   ]},
@@ -478,7 +546,7 @@ const SECTIONS = [
   {k:'beams',  name:"БАЛКИ",        type:'mark'},
   {k:'stairs', name:"ЛЕСТНИЧНЫЕ МАРШИ И ПЛОЩАДКИ", type:'mark'},
   {k:'nodes', name:"УЗЛЫ, ДЕТАЛИ, ЗАКЛАДНЫЕ", type:'general', items:[
-    "Узлы примыкания: масштаб ≥1:20, все размеры проставлены",
+    "Узлы примыкания: маСТтаб ≥1:20, все размеры проставлены",
     "Деформационные швы: зазор, армирование по обеим сторонам, вкладыши",
     "Закладные детали: привязка к осям/отметкам, марка стали, размеры пластины и анкеров",
     "Монтажные петли: класс А240, диаметр, длина",
@@ -486,7 +554,7 @@ const SECTIONS = [
   ]},
   {k:'revit', name:"СПЕЦИФИКА REVIT", type:'general', items:[
     "Позиции арматуры — Revit-тег; нет дублирующих тегов с разными номерами",
-    "Масштаб видов совпадает с масштабом на распечатке",
+    "МаСТтаб видов совпадает с маСТтабом на распечатке",
     "Размерные цепочки непрерывны, нет конфликта ручных и параметрических",
     "Семейства арматуры актуальны: нет Ø0, нет серых непечатных элементов",
     "Разрезы скоординированы с планами (нет ручных правок в разрезе)",
@@ -507,7 +575,7 @@ const SECTION_NAMES = {found:"Фундаменты", walls:"Стены", slabs:"
 const MARK_SEC_ORDER = ['found','walls','slabs','cols','beams','stairs'];
 
 let MARKS = {
-  walls: ["СНм-1","СНм-2","СНм-3","СНм-4","СНм-5","СШм-10"],
+  walls: ["СТ-1","СТ-2","СТ-3","СТ-4","СТ-5","СТ-10"],
   slabs: ["Пм-999"],
 };
 
@@ -625,7 +693,8 @@ function buildChecklist(){
     } else {
       const marks=(MARKS[sec.k]||[]);
       if(!marks.length) return;
-      marks.forEach(m=> subs.push({mark:m, items: MARK_TEMPLATE.map((t,i)=>({key:m+'#'+i, text:t})) }));
+      const tmpl = MARK_TEMPLATES[sec.k] || [];
+      marks.forEach(m=> subs.push({mark:m, items: tmpl.map((t,i)=>({key:m+'#'+i, text:t})) }));
     }
     if(!subs.length) return;
 
@@ -760,6 +829,8 @@ function buildChecklist(){
   document.getElementById('chk-sub').textContent =
     document.getElementById('pcode').value+' · '+document.getElementById('pname').value;
   updateStats();
+  populateRespFilter();
+  filterByResp(document.getElementById('resp-filter')?document.getElementById('resp-filter').value:'');
 }
 
 // ══════════ ПОЛЬЗОВАТЕЛЬСКИЕ ПРОВЕРКИ ══════════
@@ -799,6 +870,35 @@ function updateStats(){
 }
 function checkAll(v){ ROW_ORDER.forEach(k=>{RS[k]=v;applyState(k);}); updateStats(); }
 function resetAll(){ ROW_ORDER.forEach(k=>{delete RS[k];applyState(k);}); updateStats(); }
+
+// ══════════ ФИЛЬТР ПО ОТВЕТСТВЕННОМУ ══════════
+function populateRespFilter(){
+  const sel=document.getElementById('resp-filter'); if(!sel) return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— все —</option>';
+  getExecs().forEach(n=>{ const o=document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o); });
+  if(cur && Array.from(sel.options).some(o=>o.value===cur)) sel.value=cur;
+}
+function filterByResp(name){
+  const all=name==='';
+  const visSecs=new Set(), visMks=new Set();
+  ROW_ORDER.forEach(k=>{
+    const el=ROW_EL[k]; if(!el) return;
+    const show=all||(RESP[k]||'')===name;
+    el.style.display=show?'':'none';
+    if(show){
+      if(el.dataset.secchild) visSecs.add(el.dataset.secchild);
+      if(el.dataset.mark) visMks.add(el.dataset.mark);
+    }
+  });
+  const tbody=document.getElementById('chk-body');
+  tbody.querySelectorAll('tr.shdr').forEach(tr=>{ tr.style.display=(all||visSecs.has(tr.dataset.sec))?'':'none'; });
+  tbody.querySelectorAll('tr.mhdr').forEach(tr=>{ tr.style.display=(all||visMks.has(tr.dataset.markhead))?'':'none'; });
+  tbody.querySelectorAll('tr.crow-add').forEach(tr=>{
+    const vis=all||(tr.dataset.mark?visMks.has(tr.dataset.mark):visSecs.has(tr.dataset.secchild));
+    tr.style.display=vis?'':'none';
+  });
+}
 
 // ══════════ ИТОГ ══════════
 function updateSummary(){
@@ -969,7 +1069,7 @@ function enumRows(){
       });
     } else {
       (MARKS[sec.k]||[]).forEach(m=>{
-        MARK_TEMPLATE.forEach((t,i)=>{ const key=m+'#'+i; rows.push({key, secName:sec.name, mark:m, text:(EDITS[key]!==undefined?EDITS[key]:t)}); });
+        (MARK_TEMPLATES[sec.k]||[]).forEach((t,i)=>{ const key=m+'#'+i; rows.push({key, secName:sec.name, mark:m, text:(EDITS[key]!==undefined?EDITS[key]:t)}); });
         CUSTOM_ROWS.filter(r=>r.secK===sec.k&&r.mark===m).forEach(cr=>{
           rows.push({key:cr.key, secName:sec.name, mark:m, text:cr.text||''});
         });

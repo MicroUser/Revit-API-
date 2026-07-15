@@ -4,6 +4,7 @@ using System.Text;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using KzhNotes;
 
 namespace RevitKJChecklist
 {
@@ -68,27 +69,41 @@ namespace RevitKJChecklist
 
         private static string GetSavePath(Document doc)
         {
-            if (!string.IsNullOrEmpty(doc.PathName))
+            string path = GetDocumentPath(doc);
+            if (!string.IsNullOrEmpty(path))
             {
-                string dir  = Path.GetDirectoryName(doc.PathName);
-                string stem = Path.GetFileNameWithoutExtension(doc.PathName);
-                return Path.Combine(dir, stem + "_checklist.json");
+                string dir  = Path.GetDirectoryName(path);
+                string stem = Path.GetFileNameWithoutExtension(path);
+                return Path.Combine(dir, stem + "_kzh.json");
             }
-            // Проект ещё не сохранён — кладём во временную папку
             return Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "RevitKJChecklist", "unsaved.json");
         }
 
+        // Для workshared-моделей возвращает путь к центральному файлу,
+        // чтобы JSON сохранялся рядом с ним, а не рядом с локальной копией.
+        private static string GetDocumentPath(Document doc)
+        {
+            if (doc.IsWorkshared)
+            {
+                try
+                {
+                    var mp = doc.GetWorksharingCentralModelPath();
+                    string central = ModelPathUtils.ConvertModelPathToUserVisiblePath(mp);
+                    // Используем только локальные / UNC пути (не BIM 360 / Revit Server)
+                    if (!string.IsNullOrEmpty(central) &&
+                        (central.Length > 1 && central[1] == ':' || central.StartsWith(@"\\")))
+                        return central;
+                }
+                catch { }
+            }
+            return doc.PathName;
+        }
+
         private static string LoadSaved(string savePath)
         {
-            try
-            {
-                if (File.Exists(savePath))
-                    return File.ReadAllText(savePath, Encoding.UTF8);
-            }
-            catch { }
-            return null;
+            return ProjectDataStore.LoadSection(savePath, "checklist");
         }
     }
 }

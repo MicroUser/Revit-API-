@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
+using KzhNotes;
 
 namespace RevitKJChecklist
 {
@@ -54,10 +55,7 @@ namespace RevitKJChecklist
             {
                 string json = await CollectStateAsync();
                 if (!string.IsNullOrEmpty(json) && !string.IsNullOrEmpty(_savePath))
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(_savePath));
-                    File.WriteAllText(_savePath, json, Encoding.UTF8);
-                }
+                    ProjectDataStore.SaveSection(_savePath, "checklist", json);
             }
             catch { }
             _closePending = true;

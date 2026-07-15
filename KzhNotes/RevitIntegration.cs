@@ -9,7 +9,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
-
 namespace KzhNotes
 {
     /// <summary>Мост для немодального окна: очередь действий, выполняемых в валидном контексте Revit.</summary>

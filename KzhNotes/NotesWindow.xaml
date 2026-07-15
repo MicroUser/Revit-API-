@@ -106,7 +106,9 @@
         <DockPanel Grid.Row="3" Margin="0,4">
             <TextBlock Text="Набор:" VerticalAlignment="Center" Margin="0,0,6,0"/>
             <ComboBox x:Name="cboSets" Width="200" DisplayMemberPath="Name"/>
-            <Button x:Name="btnApplySet" Content="Применить набор" Click="btnApplySet_Click" Margin="6,0,20,0" MinWidth="130"/>
+            <Button x:Name="btnApplySet" Content="Применить набор" Click="btnApplySet_Click" Margin="6,0,6,0" MinWidth="130"/>
+            <Button x:Name="btnImportSets" Content="Импорт..." Click="btnImportSets_Click" MinWidth="90"/>
+            <Separator Width="14" Background="Transparent"/>
             <TextBox x:Name="txtSetName" Width="160" VerticalAlignment="Center"/>
             <Button x:Name="btnSaveSet" Content="Сохранить как набор" Click="btnSaveSet_Click" Margin="6,0,0,0" MinWidth="150"/>
         </DockPanel>

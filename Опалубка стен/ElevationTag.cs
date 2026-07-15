@@ -388,6 +388,19 @@ namespace DAN_Plugin
             if (annotSymbol == null && hiddenZones.Any())
                 _warnings.Add("Семейство аннотации \"Высотная отметка\" не найдено.");
 
+            // Activate annotation symbol in a separate transaction — FamilySymbol.Activate() only
+            // takes effect after the transaction it's called in is committed. Placing an instance
+            // in the same transaction as Activate() fails with "cannot form type" on first use.
+            if (annotSymbol != null && !annotSymbol.IsActive)
+            {
+                using (Transaction txActivate = new Transaction(doc, "Активировать семейство высотной отметки"))
+                {
+                    txActivate.Start();
+                    annotSymbol.Activate();
+                    txActivate.Commit();
+                }
+            }
+
             // Для каждой скрытой зоны: последняя видимая грань снизу → заменяется аннотацией.
             // Шаг и количество берём из oddFaces — те же данные, что и у префикса размера.
             // levelZ — raw Z нечётной грани (низ плиты / верх стены) перед разрывом.
@@ -456,6 +469,9 @@ namespace DAN_Plugin
             using (Transaction tx = new Transaction(doc, "Создать высотные отметки и размеры"))
             {
                 tx.Start();
+                var _fho = tx.GetFailureHandlingOptions();
+                _fho.SetFailuresPreprocessor(new ElevationFailurePreprocessor());
+                tx.SetFailureHandlingOptions(_fho);
 
                 // Удаляем высотные отметки, попавшие в зоны разрыва после его создания
                 if (hiddenZones.Count > 0)
@@ -567,65 +583,8 @@ namespace DAN_Plugin
                         typeToUse = spotTypeUp ?? spotTypeDown;
 
                     double faceRndZ = Math.Round(fd.Z, 6);
-                    if (annotFaceData.TryGetValue(faceRndZ, out var aInfo))
-                    {
-                        // Грань перед разрывом → GenericAnnotation вместо SpotDimension
-                        try
-                        {
-                            if (!annotSymbol.IsActive) annotSymbol.Activate();
-                            double annotUpOffset = UnitUtils.ConvertToInternalUnits(
-                                55.0 * section.Scale, UnitTypeId.Millimeters);
-                            XYZ annotPt = MakePoint(tagProj - bendGap * 2, ProjDepth(fd.FacePoint), fd.Z + annotUpOffset);
-                            FamilyInstance inst = doc.Create.NewFamilyInstance(annotPt, annotSymbol, section);
-                            if (inst != null)
-                            {
-                                int stepMm = (int)Math.Round(
-                                    UnitUtils.ConvertFromInternalUnits(aInfo.step, UnitTypeId.Millimeters));
-                                SetAnnotParam(inst, "Высота этажа", aInfo.step, stepMm);
-                                SetAnnotParam(inst, "отм.1", aInfo.levelZ, aInfo.elevMm);
-                                SetAnnotParam(inst, "Количество строк", Math.Min(aInfo.count, 4), Math.Min(aInfo.count, 4));
-                                SetAnnotParam(inst, "стрелка_снизу", 0, 1);
-                                SetAnnotParam(inst, "стрелка_сверху", 0, 0);
-                                createdCount++;
-                                existingZs.Add(faceRndZ);
-
-                                {
-                                    double leftShift = UnitUtils.ConvertToInternalUnits(
-                                        section.Scale * 13.0, UnitTypeId.Millimeters);
-                                    int remaining = aInfo.count - 4;
-                                    double curElev = aInfo.levelZ + 4 * aInfo.step;
-                                    int shiftIdx = 1;
-                                    while (remaining > 0)
-                                    {
-                                        int curCount = Math.Min(remaining, 4);
-                                        int curElevMm = (int)Math.Round(
-                                            UnitUtils.ConvertFromInternalUnits(curElev, UnitTypeId.Millimeters));
-                                        XYZ annotPtN = MakePoint(
-                                            tagProj - bendGap * 2 - shiftIdx * leftShift,
-                                            ProjDepth(fd.FacePoint),
-                                            fd.Z + annotUpOffset);
-                                        FamilyInstance instN = doc.Create.NewFamilyInstance(annotPtN, annotSymbol, section);
-                                        if (instN != null)
-                                        {
-                                            SetAnnotParam(instN, "Высота этажа", aInfo.step, stepMm);
-                                            SetAnnotParam(instN, "отм.1", curElev, curElevMm);
-                                            SetAnnotParam(instN, "Количество строк", curCount, curCount);
-                                            SetAnnotParam(instN, "стрелка_снизу", 0, 0);
-                                            SetAnnotParam(instN, "стрелка_сверху", 0, 0);
-                                        }
-                                        remaining -= 4;
-                                        curElev += 4 * aInfo.step;
-                                        shiftIdx++;
-                                    }
-                                }
-
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _warnings.Add($"Аннотация перед разрывом, Id={fd.Elem.Id}: {ex.Message}");
-                        }
-                    }
+                    if (annotFaceData.ContainsKey(faceRndZ))
+                        continue; // аннотации создаются в отдельной транзакции после коммита SpotDimension
                     else
                     {
                         try
@@ -733,6 +692,80 @@ namespace DAN_Plugin
                 tx.Commit();
             }
 
+            // Аннотации "Высотная отметка" создаются в отдельной транзакции после коммита
+            // высотных отметок (SpotDimension). Если создавать их в той же транзакции, Revit
+            // выдаёт "Не удалось сформировать тип" — семейство не успевает инициализироваться.
+            if (annotFaceData.Count > 0 && annotSymbol != null)
+            {
+                using (Transaction txAnnot = new Transaction(doc, "Создать аннотации высотных разрывов"))
+                {
+                    txAnnot.Start();
+                    var fhoAnnot = txAnnot.GetFailureHandlingOptions();
+                    fhoAnnot.SetFailuresPreprocessor(new ElevationFailurePreprocessor());
+                    txAnnot.SetFailureHandlingOptions(fhoAnnot);
+
+                    foreach (var kvp in annotFaceData)
+                    {
+                        double faceRndZ = kvp.Key;
+                        var aInfo = kvp.Value;
+                        FaceData fd = allFaces.FirstOrDefault(f => Math.Round(f.Z, 6) == faceRndZ);
+                        if (fd == null) continue;
+
+                        try
+                        {
+                            double annotUpOffset = UnitUtils.ConvertToInternalUnits(
+                                55.0 * section.Scale, UnitTypeId.Millimeters);
+                            XYZ annotPt = MakePoint(tagProj - bendGap * 2, ProjDepth(fd.FacePoint), fd.Z + annotUpOffset);
+                            FamilyInstance inst = doc.Create.NewFamilyInstance(annotPt, annotSymbol, section);
+                            if (inst != null)
+                            {
+                                int stepMm = (int)Math.Round(
+                                    UnitUtils.ConvertFromInternalUnits(aInfo.step, UnitTypeId.Millimeters));
+                                SetAnnotParam(inst, "Высота этажа", aInfo.step, stepMm);
+                                SetAnnotParam(inst, "отм.1", aInfo.levelZ, aInfo.elevMm);
+                                SetAnnotParam(inst, "Количество строк", Math.Min(aInfo.count, 4), Math.Min(aInfo.count, 4));
+                                SetAnnotParam(inst, "стрелка_снизу", 0, 1);
+                                SetAnnotParam(inst, "стрелка_сверху", 0, 0);
+                                createdCount++;
+
+                                double leftShift = UnitUtils.ConvertToInternalUnits(
+                                    section.Scale * 13.0, UnitTypeId.Millimeters);
+                                int remaining = aInfo.count - 4;
+                                double curElev = aInfo.levelZ + 4 * aInfo.step;
+                                int shiftIdx = 1;
+                                while (remaining > 0)
+                                {
+                                    int curCount = Math.Min(remaining, 4);
+                                    int curElevMm = (int)Math.Round(
+                                        UnitUtils.ConvertFromInternalUnits(curElev, UnitTypeId.Millimeters));
+                                    XYZ annotPtN = MakePoint(
+                                        tagProj - bendGap * 2 - shiftIdx * leftShift,
+                                        ProjDepth(fd.FacePoint),
+                                        fd.Z + annotUpOffset);
+                                    FamilyInstance instN = doc.Create.NewFamilyInstance(annotPtN, annotSymbol, section);
+                                    if (instN != null)
+                                    {
+                                        SetAnnotParam(instN, "Высота этажа", aInfo.step, stepMm);
+                                        SetAnnotParam(instN, "отм.1", curElev, curElevMm);
+                                        SetAnnotParam(instN, "Количество строк", curCount, curCount);
+                                        SetAnnotParam(instN, "стрелка_снизу", 0, 0);
+                                        SetAnnotParam(instN, "стрелка_сверху", 0, 0);
+                                    }
+                                    remaining -= 4;
+                                    curElev += 4 * aInfo.step;
+                                    shiftIdx++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _warnings.Add($"Аннотация перед разрывом, Id={fd.Elem.Id}: {ex.Message}");
+                        }
+                    }
+
+                    txAnnot.Commit();
+                }
+            }
 
             string assemblyComment = assembly
                 .get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString() ?? assembly.Name;
@@ -2321,7 +2354,7 @@ namespace DAN_Plugin
             Reference minURef = sideFaces.OrderBy(f => f.proj).First().r;
             Reference maxURef = sideFaces.OrderByDescending(f => f.proj).First().r;
 
-            // Расширяем crop box вида так, чтобы все торцевые грани были видимы
+            // Рашииряем crop box вида так, чтобы все торцевые грани были видимы
             try
             {
                 BoundingBoxXYZ cropBox = sectionView.CropBox;
@@ -2483,6 +2516,27 @@ namespace DAN_Plugin
             }
 
             return $"{assemblyComment}_Разрез_{Guid.NewGuid():N}";
+        }
+    }
+
+    public class ElevationFailurePreprocessor : IFailuresPreprocessor
+    {
+        public FailureProcessingResult PreprocessFailures(FailuresAccessor a)
+        {
+            foreach (FailureMessageAccessor f in a.GetFailureMessages().ToList())
+            {
+                if (f.GetSeverity() == FailureSeverity.Warning)
+                {
+                    a.DeleteWarning(f);
+                }
+                else if (f.GetSeverity() == FailureSeverity.Error)
+                {
+                    var ids = f.GetFailingElementIds();
+                    if (ids.Count > 0)
+                        a.DeleteElements(ids.ToList());
+                }
+            }
+            return FailureProcessingResult.Continue;
         }
     }
 }

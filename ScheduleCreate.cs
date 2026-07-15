@@ -66,13 +66,14 @@ namespace DAN_Plugin
             var nameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
                 // Стены
+                { "СНм", "Стены" },
                 { "СЖм", "Стены" },
                 { "СЦм", "Стены" },
-                { "СНм", "Стены" },
+                { "СШм", "Стены" },
+                { "ПРПм", "Стены" },
 
                 // Плиты
                 { "Пм",   "Плиты" },
-                { "ПРПм", "Плиты" },
                 { "КПТм", "Плиты" },
 
                 // Колонны
@@ -123,10 +124,10 @@ namespace DAN_Plugin
 
                 foreach (var entry in entries)
                 {
-                    // entry — например "СЖм-11" или "Пм-12"
+                    // entry — например "СТм-11" или "Пм-12"
                     string filterValue = entry;
 
-                    // Извлекаем кодPrefix (часть до дефиса) для маппинга: "СЖм-11" -> "СЖм"
+                    // Извлекаем кодPrefix (часть до дефиса) для маппинга: "СТм-11" -> "СТм"
                     string codePrefix = filterValue.Split(new[] { '-' }, 2)[0].Trim();
 
                     // Ищем совпадение в nameMap без учёта регистра, берём эталонный ключ
@@ -268,7 +269,7 @@ namespace DAN_Plugin
 
                             createdCount++;
                         }
-                        catch (Exception exInner)
+                        catch (Exception)
                         {
                             TaskDialog.Show("Ошибка создания спецификации",
                                 $"Спецификация {suffix} для марки {filterValue} уже создана.");

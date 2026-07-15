@@ -11,6 +11,43 @@ namespace DAN_Plugin
     [Transaction(TransactionMode.Manual)]
     public class SetViewMark : IExternalCommand
     {
+        // Канонические сокращения марок конструкций. Ключ — любой регистр (поиск
+        // case-insensitive), значение — то самое написание, которое нужно записать
+        // в параметр. Длинные сокращения идут первыми, чтобы при альтернации регулярки
+        // не сработал более короткий префикс на месте более длинного.
+        private static readonly Dictionary<string, string> MarkPrefixMap =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["РТЛм"] = "РТЛм",
+                ["ППГм"] = "ППГм",
+                ["ПРПм"] = "ПРПм",
+                ["ПРМм"] = "ПРМм",
+                ["РТм"] = "РТм",
+                ["ЛМм"] = "ЛМм",
+                ["ЛПм"] = "ЛПм",
+                ["СНм"] = "СНм",
+                ["СЖм"] = "СЖм",
+                ["СЦм"] = "СЦм",
+                ["СШм"] = "СШм",
+                ["ФЛм"] = "ФЛм",
+                ["КРм"] = "КРм",
+                ["Км"] = "Км",
+                ["Пм"] = "Пм",
+                ["Фм"] = "Фм",
+                ["Бм"] = "Бм",
+                ["Бл"] = "Бл",
+                ["Л"] = "Л",
+                ["КПТм"] = "КПТм",
+                ["РМм"] = "РМм",
+                ["БФм"] = "БФм",
+            };
+
+        private static readonly Regex MarkRegex = new Regex(
+            // (?<![...]) — перед сокращением не должно быть буквы/цифры, иначе оно
+            // может совпасть с концом случайного слова (например, "л" в "Узел").
+            $@"(?<![A-Za-zА-Яа-яЁё0-9])({string.Join("|", MarkPrefixMap.Keys.OrderByDescending(k => k.Length).Select(Regex.Escape))})[\s\-_]?(\d+)",
+            RegexOptions.IgnoreCase);
+
         public Result Execute(
             ExternalCommandData commandData,
             ref string message,
@@ -39,16 +76,14 @@ namespace DAN_Plugin
 
                     string viewName = view.Name;
 
-                    // Ищем только конкретные сокращения: РТм, Фм, СЦм, СНм, СЖм, СШм, Км, ЛМм, ЛПм, Пм, ПРПм, Бм
-                    Match match = Regex.Match(
-                        viewName,
-                        @"(РТм|Фм|СЦм|СНм|СЖм|СШм|Км|ЛМм|ЛПм|Пм|ПРПм|Бм|СТм|Л|КРм|ППГм|РТЛм|ФЛм|ПРМм)[\s\-_]?(\d+)",
-                        RegexOptions.IgnoreCase);
+                    Match match = MarkRegex.Match(viewName);
 
                     if (!match.Success)
                         continue;
 
-                    string shortName = match.Groups[1].Value;
+                    // Приводим к каноническому написанию из словаря независимо от
+                    // регистра, в котором сокращение встретилось в имени вида.
+                    string shortName = MarkPrefixMap[match.Groups[1].Value];
                     string number = match.Groups[2].Value;
 
                     string resultValue = $"{shortName}-{number}";

@@ -4,6 +4,7 @@
 
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Windows.Interop;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -18,6 +19,24 @@ namespace KzhNotes
         // Одно окно на сессию (немодальное) — повторный вызов активирует существующее.
         private static NotesWindow _window;
 
+        // Для workshared-моделей возвращает путь к центральному файлу.
+        private static string GetDocumentPath(Document doc)
+        {
+            if (doc.IsWorkshared)
+            {
+                try
+                {
+                    var mp = doc.GetWorksharingCentralModelPath();
+                    string central = ModelPathUtils.ConvertModelPathToUserVisiblePath(mp);
+                    if (!string.IsNullOrEmpty(central) &&
+                        (central.Length > 1 && central[1] == ':' || central.StartsWith(@"\\")))
+                        return central;
+                }
+                catch { }
+            }
+            return doc.PathName;
+        }
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             if (_window != null)
@@ -29,7 +48,12 @@ namespace KzhNotes
             var bridge = new RevitEventBridge();
             bridge.Init();
 
-            _window = new NotesWindow(bridge);
+            var doc = commandData.Application.ActiveUIDocument.Document;
+            string docPath     = GetDocumentPath(doc);
+            string projectDir  = !string.IsNullOrEmpty(docPath) ? Path.GetDirectoryName(docPath)              : null;
+            string projectStem = !string.IsNullOrEmpty(docPath) ? Path.GetFileNameWithoutExtension(docPath) : null;
+
+            _window = new NotesWindow(bridge, projectDir, projectStem);
             _window.Closed += (s, e) => _window = null;
 
             // Немодально + поверх окна Revit (Revit при этом остаётся интерактивным).

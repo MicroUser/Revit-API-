@@ -13,9 +13,11 @@ namespace RevitKJChecklist
         {
             var src = new Dictionary<string, string>
             {
-                { "Фм",   "found" }, { "РТФм", "found" }, { "ФНм", "found" }, { "РТм",  "found" },
-                { "СНм",  "walls" }, { "СЦм",  "walls" }, { "СКм", "walls" }, { "СШм",  "walls" },
-                { "Пм",   "slabs" }, { "ПРНМ",  "slabs" }, { "ПМТм", "slabs" },
+                { "Фм",   "found" }, { "РТФм", "found" }, { "ФНм",  "found" }, { "РТм",  "found" },
+                { "БФм",  "found" }, { "РТЛм", "found" }, { "ФЛм",  "found" },
+                { "СНм", "walls" }, { "СЖм",  "walls" }, { "СЦм",  "walls" }, { "СШм",  "walls" }, { "ПРПм", "walls" },
+                { "Пм",   "slabs" }, { "ПРНМ", "slabs" }, { "ПМТм", "slabs" },
+                { "КПТм", "slabs" }, { "РМм",  "slabs" },
                 { "Км",   "cols"  },
                 { "Бм",   "beams" },
                 { "Л",    "stairs"}, { "ЛМм",  "stairs"}, { "ЛПм", "stairs" },

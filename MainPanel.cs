@@ -91,9 +91,39 @@ namespace Пробник
               "автоматическое разрешение ссылок на листы, сохранение состава в ExtensibleStorage.")
               )
 
-              .CreateSeparator();
+              .CreateSeparator()
 
-          
+              .CreateButton<ExportViewTemplatesCommand>("Экспорт шаблонов видов", "Шаблоны\nвидов",
+              btn => btn
+              .SetLargeImage(Resources.pencil_32)
+              .SetSmallImage(Resources.pencil_16)
+              .SetLongDescription("Выгружает все имена шаблонов видов из проекта на рабочий стол в формате для вставки в словарь переименования.")
+              )
+
+              .CreateSeparator()
+
+              .CreateButton<RenameViewsCommand>("Переименование видов", "Переим.\nвиды",
+              btn => btn
+              .SetLargeImage(Resources.pencil_32)
+              .SetSmallImage(Resources.pencil_16)
+              .SetLongDescription("Переименовывает выбранные виды по шаблону: {BI_марка_конструкции}_{аббр}_{суффикс}. " +
+              "Шаблон вида должен содержать # и код в конце имени (например: *01_КЖ_(01_Тип_#суффикс)_КОД).")
+              );
+
+              /*.CreateSeparator()
+
+              .CreateButton<StairLandingExitsCommand>("Выпуски из площадки", "Выпуски\nплощадки",
+              btn => btn
+              .SetLargeImage(Resources.pencil_32)
+              .SetSmallImage(Resources.pencil_16)
+              .SetLongDescription("Создаёт выпуски (форма)11 из основной арматуры лестничной площадки в стены. " +
+              "Выберите сборку — команда найдёт арматуру по BI_марка_конструкции = комментарий сборки, " +
+              "фильтр BI_фильтр_арматуры = Армирование основное, и создаст стержни BI_A=1000мм, BI_B=1000мм.")
+              )
+
+              .CreateSeparator();*/
+
+
 
 
             return Result.Succeeded;

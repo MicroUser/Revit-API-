@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>DAN_Plugins</Name>
+    <Assembly>DAN_Plugin\Loader.dll</Assembly>
+    <AddInId>d15d37d2-4b1e-495e-8d48-024cd9e9e134</AddInId>
+    <FullClassName>MyPlugin.Loader.LoaderApp</FullClassName>
+    <VendorId>DAN_Plugins</VendorId>
+    <VendorDescription>DAN_Plugins</VendorDescription>
+  </AddIn>
+</RevitAddIns>
