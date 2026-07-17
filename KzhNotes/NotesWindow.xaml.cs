@@ -64,11 +64,13 @@ namespace KzhNotes
 
             lstSelected.ItemsSource = _items;
 
-            // фильтр по группам
-            var groups = new List<string> { "(все)" };
-            groups.AddRange(NotesLibrary.Groups().OrderBy(g => g));
-            cboGroup.ItemsSource = groups;
-            cboGroup.SelectedIndex = 0;
+            // при открытии окна тихо пробуем подтянуть свежую библиотеку с сервера;
+            // при неудаче остаётся встроенная копия — пользователь ничего не замечает
+            string startupError;
+            NotesLibrary.TryLoadFromNetwork(out startupError);
+            UpdateLibrarySourceLabel();
+
+            RebuildGroupFilter();
 
             LoadSets();
             RefreshLibrary();
@@ -77,6 +79,38 @@ namespace KzhNotes
 
         // ---------- библиотека ----------
         private void Filter_Changed(object sender, EventArgs e) { RefreshLibrary(); }
+
+        private void RebuildGroupFilter()
+        {
+            string prevSelected = cboGroup.SelectedItem as string;
+            var groups = new List<string> { "(все)" };
+            groups.AddRange(NotesLibrary.Groups().OrderBy(g => g));
+            cboGroup.ItemsSource = groups;
+            cboGroup.SelectedIndex = (prevSelected != null && groups.Contains(prevSelected))
+                ? groups.IndexOf(prevSelected) : 0;
+        }
+
+        private void UpdateLibrarySourceLabel()
+        {
+            lblLibrarySource.Text = "Библиотека: " + NotesLibrary.Source;
+        }
+
+        private void btnUpdateLibrary_Click(object sender, RoutedEventArgs e)
+        {
+            string error;
+            if (NotesLibrary.TryLoadFromNetwork(out error))
+            {
+                UpdateLibrarySourceLabel();
+                RebuildGroupFilter();
+                RefreshLibrary();
+                MessageBox.Show("Библиотека обновлена: " + NotesLibrary.Punkts.Count + " пунктов.");
+            }
+            else
+            {
+                MessageBox.Show("Не удалось обновить библиотеку с сервера:\n" + error +
+                                 "\n\nДействующая библиотека не изменена (" + NotesLibrary.Source + ").");
+            }
+        }
 
         private void RefreshLibrary()
         {

@@ -47,6 +47,7 @@ namespace KzhNotes
         public string Hint { get; set; }
 
         /// <summary>Короткое превью для списка в UI (без токенов).</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
         public string Preview
         {
             get

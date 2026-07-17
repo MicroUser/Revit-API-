@@ -16,6 +16,7 @@ namespace DAN_Plugin
         const string ParamMark   = "BI_марка_конструкции";
         const string ParamFilter = "BI_фильтр_арматуры";
         const string FilterValue = "Армирование основное";
+        const double MaxWallGapMm = 50; // допустимый зазор до ближней грани стены, дальше — считаем, что стены с этой стороны нет
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -168,9 +169,14 @@ namespace DAN_Plugin
                         })
                         {
                             var wr = FindWallInDirection(origin, xVec, allWalls);
+                            if (wr.Wall == null) continue; // стены с этой стороны плиты нет — выпуск не создаём
+
                             double distToAxis = wr.Dist;
-                            double wallThick  = wr.Wall?.Width
-                                ?? UnitUtils.ConvertToInternalUnits(250, UnitTypeId.Millimeters);
+                            double wallThick  = wr.Wall.Width;
+                            double gapToNearFace = distToAxis - wallThick / 2.0;
+                            double maxGap = UnitUtils.ConvertToInternalUnits(MaxWallGapMm, UnitTypeId.Millimeters);
+                            if (gapToNearFace > maxGap) continue; // ближайшая стена слишком далеко — не примыкает к плите
+
                             double insertionOffset = aLen - distToAxis - wallThick / 2.0 + cover;
                             XYZ adjustedOrigin = origin.Subtract(xVec.Multiply(insertionOffset));
 
@@ -313,6 +319,13 @@ namespace DAN_Plugin
 
                 double t = (p0 - origin).DotProduct(wallNormal) / denom;
                 if (t < -(w.Width / 2.0) - 0.01) continue;
+
+                // Стена — отрезок, а не бесконечная линия: точка пересечения должна лежать
+                // в пределах самого сегмента стены (с небольшим допуском на стык стен в углах).
+                XYZ hitPoint = origin.Add(direction.Multiply(t));
+                double s = hitPoint.Subtract(p0).DotProduct(wallDir);
+                double edgeTol = w.Width; // допуск ~толщина стены на угловые примыкания
+                if (s < -edgeTol || s > wallLen + edgeTol) continue;
 
                 if (t < minT) { minT = t; best = w; }
             }

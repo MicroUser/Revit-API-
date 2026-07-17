@@ -43,6 +43,11 @@
             <!-- Библиотека -->
             <GroupBox Grid.Column="0" Header="Библиотека пунктов">
                 <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <Button x:Name="btnUpdateLibrary" DockPanel.Dock="Right" Content="Обновить библиотеку"
+                                Click="btnUpdateLibrary_Click" MinWidth="150"/>
+                        <TextBlock x:Name="lblLibrarySource" VerticalAlignment="Center" Foreground="#888" FontSize="11"/>
+                    </DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                         <TextBlock Text="Группа:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                         <ComboBox x:Name="cboGroup" Width="120" SelectionChanged="Filter_Changed"/>
