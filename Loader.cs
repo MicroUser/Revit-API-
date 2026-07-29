@@ -35,6 +35,7 @@ namespace MyPlugin.Loader
             { LongDescription = "Код ищет в именах листов марки конструкций и вписывает их сборкам." });
             btnSchedule.LargeImage = LoadIcon("cells.png");
             btnSchedule.Image      = LoadIcon("cells.png");
+            btnSchedule.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/EMZZ8qeVNzg"));
 
             panel.AddSeparator();
 
@@ -44,6 +45,7 @@ namespace MyPlugin.Loader
             { LongDescription = "Создаёт аннотацию для дополнительной арматуры плит по центру." });
             btnAnnot.LargeImage = LoadIcon("slab_32.png");
             btnAnnot.Image      = LoadIcon("slab_16.png");
+            btnAnnot.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/Dywl_Y47nVY"));
 
             panel.AddSeparator();
 
@@ -58,9 +60,11 @@ namespace MyPlugin.Loader
             var btnElev = (PushButton)stackWalls[0];
             btnElev.LargeImage = LoadIcon("dimension_32.png");
             btnElev.Image      = LoadIcon("dimension_16.png");
+            btnElev.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/1MxJJG7TpuI"));
             var btnWallAnnot = (PushButton)stackWalls[1];
             btnWallAnnot.LargeImage = LoadIcon("Annotation_32.png");
             btnWallAnnot.Image      = LoadIcon("Annotation_16.png");
+            btnWallAnnot.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/CH6c1r1kSNc"));
 
             panel.AddSeparator();
 
@@ -75,9 +79,11 @@ namespace MyPlugin.Loader
             var btnChecklist = (PushButton)stackDocs[0];
             btnChecklist.LargeImage = LoadIcon("checklist_32.png");
             btnChecklist.Image      = LoadIcon("checklist_16.png");
+            btnChecklist.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/tN2wmnG9PfM"));
             var btnNotes = (PushButton)stackDocs[1];
             btnNotes.LargeImage = LoadIcon("pencil_32.png");
             btnNotes.Image      = LoadIcon("pencil_16.png");
+            btnNotes.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/7AG21HpX1FY"));
         }
 
         private static BitmapSource LoadIcon(string fileName)
