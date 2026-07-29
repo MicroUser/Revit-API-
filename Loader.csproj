@@ -53,7 +53,11 @@
     <EmbeddedResource Include="Resources\pencil_16.png" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- Авто-копирование в Addins отключено по просьбе — падало с ошибкой "занят другим
+       приложением", когда Revit запущен. Деплой теперь делается вручную/через Add-In Manager. -->
+  <!--
   <Target Name="AfterBuild">
     <Exec Command="xcopy /Y &quot;$(TargetPath)&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2023\DAN_Plugin\&quot;" ContinueOnError="true" />
   </Target>
+  -->
 </Project>

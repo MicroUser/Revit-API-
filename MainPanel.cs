@@ -1,6 +1,9 @@
-﻿using Autodesk.Revit.UI;
-using VCRevitRibbonUtil;   
+using System.Collections.Generic;
+using System.Linq;
+using Autodesk.Revit.UI;
+using VCRevitRibbonUtil;
 using DAN_Plugin;
+using RevitKJChecklist;
 using Пробник.Properties;
 
 
@@ -25,25 +28,6 @@ namespace Пробник
               "Если в проекте нет листа с нужным именем, то в сборку ничего не попадёт")
               )
 
-            /*.CreateButton<ScheduleCreate>("Создание спецификации", "Создание " +
-            "спецификации",
-              btn => btn
-              .SetLargeImage(Resources.new_table_32)
-              .SetSmallImage(Resources.new_table_16)
-              .SetLongDescription("Создает спецификацию по вписанной марке конструкции. Можно выбрать какой тип спецификации требуется с помощью кнопок выбора. " +
-              "У спецификации автоматически будет создан фильтр по выбранной марке. ")
-              )*/
-
-             /*.CreateSeparator()
-
-             .CreateButton<ClearParameterInSchedule>("Очистка параметров", "Очистка параметра",
-              btn => btn
-              .SetLargeImage(Resources.eraser_32)
-              .SetSmallImage(Resources.eraser_16)
-              .SetLongDescription("У выделенных элементов очищает параметр BI_позиция")
-              )*/
-
-
             .CreateSeparator()
 
               .CreateButton<CreateRebarAnnotation>("Аннотация доп. арматуры плит", "Аннотация доп.арм",
@@ -52,16 +36,6 @@ namespace Пробник
               .SetSmallImage(Resources.slab_16)
               .SetLongDescription("Создает аннотацию для дополнительной арматуры плит по центру")
               )
-
-
-            /*.CreateSeparator()
-
-              .CreateButton<AssemblytoElementMark>("Марка из сборки", "Марка из сборки",
-              btn => btn
-              .SetLargeImage(Resources.right_arrow_32)
-              .SetSmallImage(Resources.right_arrow_16)
-              .SetLongDescription($"Передает из сборки параметр <Комментарии> в параметр <Марка> конструкций внутри сборки")
-              )*/
 
               .CreateSeparator()
 
@@ -93,6 +67,15 @@ namespace Пробник
 
               .CreateSeparator()
 
+              .CreateButton<ChecklistCommand>("Чек-лист КЖ", "Чек-лист",
+              btn => btn
+              .SetLargeImage(Resources.checklist_32)
+              .SetSmallImage(Resources.checklist_16)
+              .SetLongDescription("Открывает чек-лист проверки конструкций.")
+              )
+
+              .CreateSeparator()
+
               .CreateButton<ExportViewTemplatesCommand>("Экспорт шаблонов видов", "Шаблоны\nвидов",
               btn => btn
               .SetLargeImage(Resources.pencil_32)
@@ -110,21 +93,29 @@ namespace Пробник
               "Шаблон вида должен содержать # и код в конце имени (например: *01_КЖ_(01_Тип_#суффикс)_КОД).")
               );
 
-              /*.CreateSeparator()
+            // Видео-инструкции по F1: обёртка VCRevitRibbonUtil.Button не даёт доступа к нативному
+            // Autodesk.Revit.UI.ContextualHelp (это то, что Revit открывает по F1, когда кнопка в
+            // фокусе), поэтому назначаем его напрямую через Revit API — ПОСЛЕ того как кнопки уже
+            // созданы, по их внутреннему имени (первый аргумент CreateButton, см. выше).
+            var videoLinks = new Dictionary<string, string>
+            {
+                ["Спецификация каркасов"] = "https://youtu.be/EMZZ8qeVNzg",
+                ["Аннотация доп. арматуры плит"] = "https://youtu.be/Dywl_Y47nVY",
+                ["Аннотация арматуры стен"] = "https://youtu.be/CH6c1r1kSNc",
+                ["Опалубка стен"] = "https://youtu.be/1MxJJG7TpuI",
+                ["Примечания на листах"] = "https://youtu.be/7AG21HpX1FY",
+                ["Чек-лист КЖ"] = "https://youtu.be/tN2wmnG9PfM",
+            };
 
-              .CreateButton<StairLandingExitsCommand>("Выпуски из площадки", "Выпуски\nплощадки",
-              btn => btn
-              .SetLargeImage(Resources.pencil_32)
-              .SetSmallImage(Resources.pencil_16)
-              .SetLongDescription("Создаёт выпуски (форма)11 из основной арматуры лестничной площадки в стены. " +
-              "Выберите сборку — команда найдёт арматуру по BI_марка_конструкции = комментарий сборки, " +
-              "фильтр BI_фильтр_арматуры = Армирование основное, и создаст стержни BI_A=1000мм, BI_B=1000мм.")
-              )
-
-              .CreateSeparator();*/
-
-
-
+            RibbonPanel kzhPanel = a.GetRibbonPanels("DAN").FirstOrDefault(p => p.Name == "КЖ");
+            if (kzhPanel != null)
+            {
+                foreach (RibbonItem item in kzhPanel.GetItems())
+                {
+                    if (item is PushButton pb && videoLinks.TryGetValue(pb.Name, out string url))
+                        pb.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, url));
+                }
+            }
 
             return Result.Succeeded;
         }

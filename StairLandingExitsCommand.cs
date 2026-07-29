@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.Attributes;
@@ -249,15 +249,14 @@ namespace DAN_Plugin
                 }
 
                 // Рабочий набор ".#09_Арм_Лестницы"
-                int? wsInt = null;
-                if (doc.IsWorkshared)
-                {
-                    var ws = new FilteredWorksetCollector(doc)
+                // var — тип должен совпадать с тем, что принимает Parameter.Set(...) в
+                // конкретной версии Revit API (int в 2023, long в 2026), см. ElementIdCompat.
+                var wsInt = doc.IsWorkshared
+                    ? new FilteredWorksetCollector(doc)
                         .OfKind(WorksetKind.UserWorkset)
                         .Cast<Workset>()
-                        .FirstOrDefault(w => w.Name == ".#09_Арм_Лестницы");
-                    wsInt = ws?.Id.IntegerValue;
-                }
+                        .FirstOrDefault(w => w.Name == ".#09_Арм_Лестницы")?.Id.IntValue()
+                    : null;
                 if (wsInt.HasValue)
                 {
                     foreach (var id in createdIds)

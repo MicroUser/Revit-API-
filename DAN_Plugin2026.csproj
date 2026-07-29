@@ -1,0 +1,81 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Параллельная сборка под Revit 2026 (.NET 8) — существующий DAN_Plugin.csproj
+    (net48, Revit 2023) не трогается. См. миграционные заметки в конце файла.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>Пробник</RootNamespace>
+    <AssemblyName>DAN_Plugin</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
+    <EnableDefaultItems>true</EnableDefaultItems>
+    <OutputPath>bin2026\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Отдельная intermediate-папка (obj2026\) задаётся в Directory.Build.props —
+         DAN_Plugin.csproj (net48) использует общую "obj\", а MSBuildProjectExtensionsPath
+         обязан быть выставлен до импорта Microsoft.Common.props (см. MSB3540). -->
+    <!-- Автоглоб по умолчанию исключает только obj2026\/bin2026\ (свои) — старые
+         obj\/bin\ (сгенерированные .g.cs от net48-сборки DAN_Plugin.csproj) нужно
+         исключить явно, иначе их подхватывает как дублирующие исходники. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**;obj2026\**;bin2026\**</DefaultItemExcludes>
+    <!-- Revit грузит DLL напрямую (не через "dotnet"), .deps.json он не читает — без этого
+         NuGet-зависимости (System.Drawing.Common, System.Resources.Extensions) не попадают
+         в выходную папку физически, и плагин упадёт при первом обращении к этим типам. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
+    <!-- Resources.Designer.cs использует System.Drawing.Bitmap — в .NET (Core) это
+         отдельный пакет, не часть базовых библиотек (в отличие от .NET Framework). -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Loader.cs — отдельная сборка (Loader2026.csproj), не часть DAN_Plugin.dll. -->
+    <Compile Remove="Loader.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>C:\Program Files\Autodesk\Revit 2026\RevitAPI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>C:\Program Files\Autodesk\Revit 2026\RevitAPIUI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>lib\Microsoft.Web.WebView2.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.Wpf">
+      <HintPath>lib\Microsoft.Web.WebView2.Wpf.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Чеклист\checklist.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="RebarZones\rebar_zones.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Dev-деплой отключён по просьбе — падал с ошибкой "занят другим приложением", когда
+       Revit запущен. Деплой теперь делается вручную/через Add-In Manager.
+  <Target Name="DeployToAddins2026" AfterTargets="Build">
+    <MakeDir Directories="C:\ProgramData\Autodesk\Revit\Addins\2026\DAN_Plugin" Condition="!Exists('C:\ProgramData\Autodesk\Revit\Addins\2026\DAN_Plugin')" />
+    <Exec Command="xcopy /Y /E /I &quot;$(TargetDir)*&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2026\DAN_Plugin\&quot;" ContinueOnError="true" />
+  </Target>
+  -->
+
+</Project>

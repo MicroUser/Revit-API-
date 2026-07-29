@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
+using System.Windows.Threading;
 
 namespace DAN_Plugin
 {
@@ -38,7 +40,8 @@ namespace DAN_Plugin
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             _warnings.Clear();
-            UIDocument uiDoc = commandData.Application.ActiveUIDocument;
+            UIApplication uiApp = commandData.Application;
+            UIDocument uiDoc = uiApp.ActiveUIDocument;
             Document doc = uiDoc.Document;
             ViewSection section = doc.ActiveView as ViewSection;
 
@@ -69,9 +72,23 @@ namespace DAN_Plugin
                 return Result.Failed;
             }
 
-            // Шаг 2: окно настроек
+            // Шаг 2: окно настроек — немодальное: пользователь может продолжать работать
+            // с текущим видом (кликать/выделять, панорамировать, зумить), пока окно открыто.
+            //
+            // Show() не блокирует Revit, но и не ждёт закрытия окна — Execute() тут же пойдёт
+            // дальше с ещё не заполненными настройками. Вместо ShowDialog() вручную прокачиваем
+            // очередь сообщений текущего потока (тот же поток, что у главного окна Revit) через
+            // Dispatcher.PushFrame, пока окно не закроется — это и не блокирует Revit (сообщения
+            // от его окна тоже обрабатываются), и сохраняет синхронный ход выполнения команды.
             var settingsWindow = new SettingsWindow();
-            if (settingsWindow.ShowDialog() != true)
+
+            var frame = new DispatcherFrame();
+            settingsWindow.Closed += (s, e) => frame.Continue = false;
+            settingsWindow.Topmost = true;
+            settingsWindow.Show();
+            Dispatcher.PushFrame(frame);
+
+            if (settingsWindow.Result != true)
                 return Result.Cancelled;
 
             bool createBreak = settingsWindow.CreateBreak;
@@ -401,11 +418,54 @@ namespace DAN_Plugin
                 }
             }
 
+            // Элемент узла проёма — вставляется в левый нижний угол каждого проёма
+            // (см. CreateOpeningDimensions), с параметрами "Ширина"/"Глубина" = размерам проёма.
+            // "...прямоугольныйцвет" — имя ТИПА внутри семейства "(Элемент_узлов)Обозначение_
+            // проема_прямоугольный" (не имя самого семейства), поэтому ищем по fs.Name.
+            const string OpeningNodeTypeName = "(Элемент_узлов)Обозначение_проема_прямоугольныйцвет";
+            FamilySymbol openingNodeSymbol = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .OfCategory(BuiltInCategory.OST_DetailComponents)
+                .Cast<FamilySymbol>()
+                .FirstOrDefault(fs => fs.Name.Equals(
+                    OpeningNodeTypeName, StringComparison.OrdinalIgnoreCase));
+            if (openingNodeSymbol == null)
+                _warnings.Add($"Тип \"{OpeningNodeTypeName}\" не найден.");
+            if (openingNodeSymbol != null && !openingNodeSymbol.IsActive)
+            {
+                using (Transaction txActivateNode = new Transaction(doc, "Активировать семейство узла проёма"))
+                {
+                    txActivateNode.Start();
+                    openingNodeSymbol.Activate();
+                    txActivateNode.Commit();
+                }
+            }
+
             // Для каждой скрытой зоны: последняя видимая грань снизу → заменяется аннотацией.
             // Шаг и количество берём из oddFaces — те же данные, что и у префикса размера.
-            // levelZ — raw Z нечётной грани (низ плиты / верх стены) перед разрывом.
-            // Это и есть проектная высота уровня, которую нужно записать в "отм.1".
-            var annotFaceData = new Dictionary<double, (double step, int count, int elevMm, double levelZ)>();
+            // Саму проектную высоту для "отм.1" читаем позже — из параметра "Единственное/
+            // верхнее значение" временной высотной отметки на этой же грани (см. annotLevelZ ниже).
+            // Типовой шаг этажа — берём НАИБОЛЕЕ ЧАСТО ВСТРЕЧАЮЩИЙСЯ интервал между соседними
+            // oddFaces по ВСЕМУ зданию, а не локально рядом с конкретным разрывом: у разрыва
+            // может обнаружиться нетиповой сосед (напр. более высокий первый этаж) — тогда
+            // локально измеренный шаг не совпадает с реальным повторяющимся шагом остальных
+            // этажей, span перестаёт делиться на count без остатка, и аннотация для этого
+            // разрыва не создаётся вовсе (а другие разрывы, где сосед типовой, — создаются).
+            double typicalStep = 0;
+            if (oddFaces.Count > 1)
+            {
+                double stepBucket = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+                var stepDiffs = new List<double>();
+                for (int k = 1; k < oddFaces.Count; k++)
+                    stepDiffs.Add(oddFaces[k].Z - oddFaces[k - 1].Z);
+                typicalStep = stepDiffs
+                    .GroupBy(d => Math.Round(d / stepBucket))
+                    .OrderByDescending(g => g.Count())
+                    .First()
+                    .Average();
+            }
+
+            var annotFaceData = new Dictionary<double, (double step, int count)>();
             foreach (var hz in hiddenZones)
             {
                 if (annotSymbol == null) break;
@@ -426,25 +486,21 @@ namespace DAN_Plugin
                     if (oddFaces[k].Z > hz.top) { firstOddIdx = k; break; }
                 if (lastOddIdx < 0 || firstOddIdx < 0) continue;
 
-                double step = lastOddIdx > 0
+                double localStep = lastOddIdx > 0
                     ? oddFaces[lastOddIdx].Z - oddFaces[lastOddIdx - 1].Z
                     : firstOddIdx + 1 < oddFaces.Count
                         ? oddFaces[firstOddIdx + 1].Z - oddFaces[firstOddIdx].Z
                         : 0;
+                // Типовой (наиболее частый по всему зданию) шаг — надёжнее локального: рядом с
+                // конкретным разрывом сосед может оказаться нетиповым этажом (см. пояснение выше).
+                double step = typicalStep > 1e-6 ? typicalStep : localStep;
                 double span = oddFaces[firstOddIdx].Z - oddFaces[lastOddIdx].Z;
-                double tol  = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
+                double tol  = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
                 int count   = step > 1e-6 ? (int)Math.Round(span / step) : 0;
-                if (count > 0 && Math.Abs(count * step - span) < tol)
+                bool valid = count > 0 && Math.Abs(count * step - span) < tol;
+                if (valid)
                 {
-                    // levelZ = проектная высота грани аннотации.
-                    // SpotDimension для этой грани показывает lastZ*304.8 - 900 мм,
-                    // где 900 мм — смещение базовой точки проекта относительно начала
-                    // внутренних координат. Вычитаем это смещение из raw Z.
-                    double slabOffset = UnitUtils.ConvertToInternalUnits(900.0, UnitTypeId.Millimeters);
-                    double levelZ = lastZ - slabOffset;
-                    int elevMm = (int)Math.Round(
-                        UnitUtils.ConvertFromInternalUnits(levelZ, UnitTypeId.Millimeters));
-                    annotFaceData[Math.Round(lastZ, 6)] = (step, count, elevMm, levelZ);
+                    annotFaceData[Math.Round(lastZ, 6)] = (step, count);
                 }
             }
 
@@ -465,6 +521,12 @@ namespace DAN_Plugin
             int skippedCount = 0;
             int openingsFound = 0;
 
+            // Проектная высота (внутр. футы) для граней-заглушек разрыва, ключ — Math.Round(Z,6).
+            // Заполняется в основном цикле: для такой грани временно создаётся обычная высотная
+            // отметка, из неё считывается параметр "Единственное/верхнее значение" (именно то,
+            // что реально вычисляет и показывает Revit — без собственной арифметики смещений),
+            // затем отметка удаляется — вместо неё встанет типовая аннотация.
+            var annotLevelZ = new Dictionary<double, double>();
 
             using (Transaction tx = new Transaction(doc, "Создать высотные отметки и размеры"))
             {
@@ -530,43 +592,6 @@ namespace DAN_Plugin
                         try { doc.Delete(id); } catch { }
                 }
 
-                // Удаляем ссылочные разрезы, попавшие в зону разрыва.
-                // Маркеры разрезов (OST_Sections) видны в виде через collector по виду.
-                // hiddenZones — мировые координаты; маркеры могут хранить Z в проектных →
-                // конвертируем через смещение базовой точки проекта.
-                if (hiddenZones.Count > 0)
-                {
-                    var refMarkersToDelete = new FilteredElementCollector(doc, section.Id)
-                        .OfCategory(BuiltInCategory.OST_Sections)
-                        .WhereElementIsNotElementType()
-                        .ToList()
-                        .Where(e =>
-                        {
-                            BoundingBoxXYZ bb = e.get_BoundingBox(null);
-                            if (bb == null) return false;
-                            double midZ = (bb.Min.Z + bb.Max.Z) / 2.0;
-                            return hiddenZones.Any(hz => midZ > hz.bottom && midZ < hz.top);
-                        })
-                        .Select(e => e.Id)
-                        .ToList();
-
-                    foreach (var id in refMarkersToDelete)
-                        try { doc.Delete(id); } catch { }
-                }
-
-                // Смещение между raw Z (внутренние единицы, футы) и проектной высотой.
-                // SpotDimension.Value — проектная высота в футах; Origin.Z — raw Z в футах.
-                // Берём из любого существующего SpotDimension в виде, без фильтра по типу.
-                double? elevOffset = null;
-                {
-                    var anySD = new FilteredElementCollector(doc, section.Id)
-                        .OfClass(typeof(SpotDimension))
-                        .Cast<SpotDimension>()
-                        .FirstOrDefault();
-                    if (anySD != null)
-                        elevOffset = anySD.Value - anySD.Origin.Z;
-                }
-
                 for (int i = 0; i < allFaces.Count; i++)
                 {
                     FaceData fd = allFaces[i];
@@ -583,13 +608,10 @@ namespace DAN_Plugin
                         typeToUse = spotTypeUp ?? spotTypeDown;
 
                     double faceRndZ = Math.Round(fd.Z, 6);
-                    if (annotFaceData.ContainsKey(faceRndZ))
-                        continue; // аннотации создаются в отдельной транзакции после коммита SpotDimension
-                    else
+                    bool isAnnotFace = annotFaceData.ContainsKey(faceRndZ);
+                    try
                     {
-                        try
-                        {
-                            double z = fd.Z;
+                        double z = fd.Z;
                             double originProj = Math.Max(fd.LeftProj, globalMinRight);
                             double depth = ProjDepth(fd.FacePoint);
 
@@ -603,16 +625,33 @@ namespace DAN_Plugin
                             if (spotDim != null)
                             {
                                 if (typeToUse != null) spotDim.ChangeTypeId(typeToUse.Id);
-                                if (elevOffset == null) elevOffset = spotDim.Value - z;
-                                createdCount++;
-                                existingZs.Add(Math.Round(z, 6));
+
+                                if (isAnnotFace)
+                                {
+                                    // Грань-заглушка перед разрывом: сама отметка на виде не
+                                    // нужна (вместо неё встанет типовая аннотация) — она создана
+                                    // только для того, чтобы Revit сам посчитал правильное
+                                    // значение, без собственной арифметики смещений.
+                                    // Параметр SPOT_ELEV_SINGLE_OR_UPPER_VALUE — вычисляемый
+                                    // (IsReadOnly), поэтому перед чтением документ нужно
+                                    // пересчитать, иначе у только что созданного элемента там
+                                    // будет значение по умолчанию (0).
+                                    doc.Regenerate();
+                                    Parameter pv = spotDim.get_Parameter(BuiltInParameter.SPOT_ELEV_SINGLE_OR_UPPER_VALUE);
+                                    if (pv != null && pv.HasValue) annotLevelZ[faceRndZ] = pv.AsDouble();
+                                    doc.Delete(spotDim.Id);
+                                }
+                                else
+                                {
+                                    createdCount++;
+                                    existingZs.Add(Math.Round(z, 6));
+                                }
                             }
                         }
                         catch (Exception ex)
                         {
                             _warnings.Add($"Высотная отметка, элемент Id={fd.Elem.Id}: {ex.Message}");
                         }
-                    }
                 }
 
                 // Удаляем существующие размеры перед пересозданием (предотвращает дублирование)
@@ -685,7 +724,7 @@ namespace DAN_Plugin
                 // (высота + привязка к низу стены; ширина + привязка к оси/торцу)
                 foreach (Wall w in walls.OfType<Wall>())
                 {
-                    try { openingsFound += CreateOpeningDimensions(doc, section, w, rightVec, viewDir, hiddenZones); }
+                    try { openingsFound += CreateOpeningDimensions(doc, section, w, rightVec, viewDir, hiddenZones, openingNodeSymbol); }
                     catch (Exception ex) { _warnings.Add($"Размеры проёмов, стена Id={w.Id}: {ex.Message}"); }
                 }
 
@@ -710,9 +749,18 @@ namespace DAN_Plugin
                         var aInfo = kvp.Value;
                         FaceData fd = allFaces.FirstOrDefault(f => Math.Round(f.Z, 6) == faceRndZ);
                         if (fd == null) continue;
+                        if (!annotLevelZ.TryGetValue(faceRndZ, out double levelZ))
+                        {
+                            _warnings.Add($"Аннотация перед разрывом, Id={fd.Elem.Id}: не удалось прочитать " +
+                                "\"Единственное/верхнее значение\" у временной высотной отметки.");
+                            continue;
+                        }
 
                         try
                         {
+                            int elevMm = (int)Math.Round(
+                                UnitUtils.ConvertFromInternalUnits(levelZ, UnitTypeId.Millimeters));
+
                             double annotUpOffset = UnitUtils.ConvertToInternalUnits(
                                 55.0 * section.Scale, UnitTypeId.Millimeters);
                             XYZ annotPt = MakePoint(tagProj - bendGap * 2, ProjDepth(fd.FacePoint), fd.Z + annotUpOffset);
@@ -722,7 +770,7 @@ namespace DAN_Plugin
                                 int stepMm = (int)Math.Round(
                                     UnitUtils.ConvertFromInternalUnits(aInfo.step, UnitTypeId.Millimeters));
                                 SetAnnotParam(inst, "Высота этажа", aInfo.step, stepMm);
-                                SetAnnotParam(inst, "отм.1", aInfo.levelZ, aInfo.elevMm);
+                                SetAnnotParam(inst, "отм.1", levelZ, elevMm);
                                 SetAnnotParam(inst, "Количество строк", Math.Min(aInfo.count, 4), Math.Min(aInfo.count, 4));
                                 SetAnnotParam(inst, "стрелка_снизу", 0, 1);
                                 SetAnnotParam(inst, "стрелка_сверху", 0, 0);
@@ -731,7 +779,7 @@ namespace DAN_Plugin
                                 double leftShift = UnitUtils.ConvertToInternalUnits(
                                     section.Scale * 13.0, UnitTypeId.Millimeters);
                                 int remaining = aInfo.count - 4;
-                                double curElev = aInfo.levelZ + 4 * aInfo.step;
+                                double curElev = levelZ + 4 * aInfo.step;
                                 int shiftIdx = 1;
                                 while (remaining > 0)
                                 {
@@ -813,10 +861,26 @@ namespace DAN_Plugin
                             .Select(by => new XYZ(bx, by, 0).DotProduct(rightVec)))
                         .Min()
                     : 0.0;
+                double wallMaxR = (wallBb != null)
+                    ? new[] { wallBb.Min.X, wallBb.Max.X }
+                        .SelectMany(bx => new[] { wallBb.Min.Y, wallBb.Max.Y }
+                            .Select(by => new XYZ(bx, by, 0).DotProduct(rightVec)))
+                        .Max()
+                    : 0.0;
                 double wallBotZ  = wallBb?.Min.Z ?? 0.0;
                 double wallHeight = wallBb != null ? wallBb.Max.Z - wallBb.Min.Z : double.MaxValue;
 
                 var openings = new List<(double minR, double maxR, double botZ, double topZ)>();
+
+                // Силуэты отдельных лицевых граней (по одной на грань, независимо от того,
+                // есть ли внутри неё ещё петли) — нужны, чтобы поймать проёмы, прорезающие
+                // стену НАСКВОЗЬ по высоте и толщине: тогда стена физически распадается на
+                // несколько отдельных Solid (колонна слева, колонна справа), и у каждой из
+                // них лицевая грань — простой прямоугольник с ОДНОЙ петлёй контура, без
+                // внутренней "дырки" — такой проём не находится через сравнение с outerIdx
+                // ниже (loops.Count < 2). Зазор МЕЖДУ такими гранями = сам проём (см. ниже,
+                // после всех Solid/граней этой стены).
+                var columnBoxes = new List<(double mn, double mx, double bz, double tz)>();
 
                 // Проверяем оба режима геометрии:
                 // — без вида: SolidSolidCutUtils-резы и hosted-семейства всегда видны
@@ -844,9 +908,8 @@ namespace DAN_Plugin
 
                             IList<CurveLoop> loops;
                             try { loops = pf.GetEdgesAsCurveLoops(); } catch { continue; }
-                            if (loops == null || loops.Count < 2) continue;
+                            if (loops == null || loops.Count == 0) continue;
 
-                            // Внешний контур — с наибольшей площадью (ширина × высота)
                             var boxes = loops.Select(loop =>
                             {
                                 double mn = double.MaxValue, mx = double.MinValue;
@@ -861,33 +924,128 @@ namespace DAN_Plugin
                                 return (mn, mx, bz, tz);
                             }).ToList();
 
-                            int outerIdx = -1; double maxArea = double.MinValue;
-                            for (int li = 0; li < boxes.Count; li++)
-                            {
-                                double a = (boxes[li].mx - boxes[li].mn) * (boxes[li].tz - boxes[li].bz);
-                                if (a > maxArea) { maxArea = a; outerIdx = li; }
-                            }
-
-                            double outerMinR = boxes[outerIdx].mn;
-                            double outerMaxR = boxes[outerIdx].mx;
                             // Допуск: 30 мм — колонны/стены примыкают вплотную к торцу
                             double edgeTol = UnitUtils.ConvertToInternalUnits(30, UnitTypeId.Millimeters);
 
+                            // Вложенность: loop[a] — настоящая "дырка" (проём), если её габарит
+                            // ЦЕЛИКОМ внутри loop[b]. Раньше "внешним" считался просто самый
+                            // большой по площади loop, а ВСЁ остальное — дыркой; это ломалось,
+                            // когда проём режет стену насквозь по высоте (и толщине) — грань
+                            // тогда распадается на НЕСКОЛЬКО НЕ ВЛОЖЕННЫХ друг в друга петель
+                            // (левая колонна материала, правая колонна), и меньшая из них
+                            // ошибочно принималась за проём, хотя это тоже сплошной материал.
+                            bool IsNestedIn(int a, int b) =>
+                                a != b &&
+                                boxes[a].mn >= boxes[b].mn - edgeTol && boxes[a].mx <= boxes[b].mx + edgeTol &&
+                                boxes[a].bz >= boxes[b].bz - edgeTol && boxes[a].tz <= boxes[b].tz + edgeTol;
+
+                            // "Верхнеуровневые" силуэты — не вложены ни в один другой. Обычно
+                            // один (целая грань стены); если проём насквозь — несколько.
+                            var topLevel = new List<int>();
+                            for (int a = 0; a < boxes.Count; a++)
+                            {
+                                bool nested = false;
+                                for (int b = 0; b < boxes.Count; b++)
+                                    if (IsNestedIn(a, b)) { nested = true; break; }
+                                if (!nested) topLevel.Add(a);
+                            }
+                            foreach (int t in topLevel) columnBoxes.Add(boxes[t]);
+
+                            // Выемка (надрез) в границе единственного верхнеуровневого силуэта —
+                            // проём, доходящий до низа (или другого края) грани, но не образующий
+                            // отдельную вложенную петлю: контур остаётся ОДНИМ, просто не выпуклым
+                            // (буквой "П"/"Г"), и его bounding box выглядит как обычный прямоугольник.
+                            // AddBottomNotches обходит точки контура (не bbox) и находит такой разрыв.
+                            if (topLevel.Count == 1)
+                                AddBottomNotches(loops[topLevel[0]], rightVec, openings);
+
+                            // Вложенные петли — настоящие проёмы (островные вырезы), с фильтром
+                            // по краю относительно СВОЕГО содержащего верхнеуровневого силуэта.
                             for (int li = 0; li < boxes.Count; li++)
                             {
-                                if (li == outerIdx) continue;
-                                // Артефакт примыкания: inner loop прижат к левому или правому
-                                // торцу внешнего контура (колонна/стена срезает грань по краю).
-                                // Реальные проёмы (окна, двери, профильные вырезы) расположены
-                                // внутри грани и не касаются горизонтальных краёв.
-                                bool touchesLeft  = Math.Abs(boxes[li].mn - outerMinR) < edgeTol;
-                                bool touchesRight = Math.Abs(boxes[li].mx - outerMaxR) < edgeTol;
+                                if (topLevel.Contains(li)) continue;
+                                int parent = -1;
+                                foreach (int t in topLevel) if (IsNestedIn(li, t)) { parent = t; break; }
+                                if (parent < 0) continue;
+
+                                bool touchesLeft  = Math.Abs(boxes[li].mn - boxes[parent].mn) < edgeTol;
+                                bool touchesRight = Math.Abs(boxes[li].mx - boxes[parent].mx) < edgeTol;
                                 if (touchesLeft || touchesRight) continue;
                                 openings.Add((boxes[li].mn, boxes[li].mx, boxes[li].bz, boxes[li].tz));
+                            }
+
+                            // Несколько верхнеуровневых силуэтов НА ОДНОЙ ГРАНИ (проём насквозь) —
+                            // зазор между соседними (по R) и есть сам проём.
+                            if (topLevel.Count >= 2)
+                            {
+                                var cols = topLevel.Select(i => boxes[i]).OrderBy(b => b.mn).ToList();
+                                double zOverlapTol = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+                                for (int ci = 0; ci < cols.Count - 1; ci++)
+                                {
+                                    var left = cols[ci]; var right = cols[ci + 1];
+                                    if (right.mn - left.mx < edgeTol) continue;
+                                    double ovBz = Math.Max(left.bz, right.bz);
+                                    double ovTz = Math.Min(left.tz, right.tz);
+                                    if (ovTz - ovBz > zOverlapTol)
+                                        openings.Add((left.mx, right.mn, ovBz, ovTz));
+                                }
                             }
                         }
                     }
                 }
+
+                // Подстраховка на случай, если Revit всё же отдаёт сквозной проём как ДВА
+                // отдельных Solid/грани (а не одну грань с непересекающимися петлями,
+                // обработанными выше) — зазор между такими "колоннами" из разных проходов
+                // тоже проверяем.
+                var dedupCols = new List<(double mn, double mx, double bz, double tz)>();
+                double colTol = UnitUtils.ConvertToInternalUnits(30, UnitTypeId.Millimeters);
+                foreach (var cb in columnBoxes.OrderBy(c => c.mn))
+                    if (!dedupCols.Any(d => Math.Abs(d.mn - cb.mn) < colTol && Math.Abs(d.mx - cb.mx) < colTol))
+                        dedupCols.Add(cb);
+
+                if (dedupCols.Count >= 2)
+                {
+                    double zOverlapTol2 = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+                    for (int ci = 0; ci < dedupCols.Count - 1; ci++)
+                    {
+                        var left = dedupCols[ci];
+                        var right = dedupCols[ci + 1];
+                        if (right.mn - left.mx < colTol) continue;   // нет зазора между колоннами
+
+                        double ovBz = Math.Max(left.bz, right.bz);
+                        double ovTz = Math.Min(left.tz, right.tz);
+                        if (ovTz - ovBz > zOverlapTol2)
+                            openings.Add((left.mx, right.mn, ovBz, ovTz));
+                    }
+                }
+
+                // Детектирование через вставки (двери/окна/hosted-проёмы) — та же проверка,
+                // что уже используется в CreateOpeningDimensions/GetWallOpeningBoxes. Без неё
+                // проёмы, сделанные вставкой (а не вырезом в профиле стены), здесь не находились
+                // вовсе — сырая геометрия стены для таких проёмов дырки не даёт.
+                try
+                {
+                    ICollection<ElementId> inserts = w.FindInserts(true, false, true, true);
+                    if (inserts != null)
+                    {
+                        foreach (ElementId insId in inserts)
+                        {
+                            BoundingBoxXYZ ibb = doc.GetElement(insId)?.get_BoundingBox(null);
+                            if (ibb == null) continue;
+                            double mn = double.MaxValue, mx = double.MinValue;
+                            foreach (double x in new[] { ibb.Min.X, ibb.Max.X })
+                                foreach (double y in new[] { ibb.Min.Y, ibb.Max.Y })
+                                {
+                                    double p = new XYZ(x, y, 0).DotProduct(rightVec);
+                                    if (p < mn) mn = p;
+                                    if (p > mx) mx = p;
+                                }
+                            openings.Add((mn, mx, ibb.Min.Z, ibb.Max.Z));
+                        }
+                    }
+                }
+                catch { }
 
                 // Детектирование через зависимые элементы (wall-hosted Generic Models)
                 try
@@ -923,8 +1081,59 @@ namespace DAN_Plugin
                     .Select(g => g.OrderByDescending(o => o.topZ - o.botZ).First())
                     .ToList();
 
+                // Пересечения с другими стенами модели — важная часть геометрического
+                // "отпечатка": если количество/положение примыкающих (пересекающих) стен
+                // меняется между этажами, опалубка в местах примыкания другая, даже если
+                // толщина и проёмы этой стены совпадают (напр. этаж 1 — 2 примыкающие стены,
+                // этаж 2 — только 1). Ищем по перекрытию габаритов вдоль этой стены (rightVec),
+                // в пределах её высоты по Z — без привязки к конкретной сборке (примыкающая
+                // стена может относиться к другой сборке).
+                var crossPositions = new List<int>();
+                {
+                    double zTolCross = UnitUtils.ConvertToInternalUnits(100, UnitTypeId.Millimeters);
+                    var otherWalls = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Wall))
+                        .Cast<Wall>()
+                        .Where(ow => ow.Id != w.Id);
+
+                    foreach (Wall ow in otherWalls)
+                    {
+                        BoundingBoxXYZ obb = ow.get_BoundingBox(null);
+                        if (obb == null) continue;
+                        // та же высота (этаж) — иначе это стена другого этажа/уровня
+                        if (obb.Max.Z < wallBotZ + zTolCross || obb.Min.Z > wallBotZ + wallHeight - zTolCross)
+                            continue;
+
+                        double oMinR = double.MaxValue, oMaxR = double.MinValue;
+                        foreach (double x in new[] { obb.Min.X, obb.Max.X })
+                            foreach (double y in new[] { obb.Min.Y, obb.Max.Y })
+                            {
+                                double p = new XYZ(x, y, 0).DotProduct(rightVec);
+                                if (p < oMinR) oMinR = p;
+                                if (p > oMaxR) oMaxR = p;
+                            }
+
+                        double overlapLo = Math.Max(wallMinR, oMinR);
+                        double overlapHi = Math.Min(wallMaxR, oMaxR);
+                        if (overlapHi - overlapLo < zTolCross) continue;   // только касание/нет пересечения
+
+                        double posMid = (overlapLo + overlapHi) / 2.0;
+                        int posMm = (int)Math.Round(
+                            UnitUtils.ConvertFromInternalUnits(posMid - wallMinR, UnitTypeId.Millimeters) / 100.0);
+                        crossPositions.Add(posMm);
+                    }
+                }
+                // Дедупликация по позиции: одна и та же физическая примыкающая стена нередко
+                // смоделирована НЕСКОЛЬКИМИ элементами Wall в этом месте (напр. тоже разбита
+                // по этажам/участкам) — считать их отдельными пересечениями не нужно, важна
+                // только сама позиция примыкания вдоль ЭТОЙ стены.
+                crossPositions = crossPositions.Distinct().ToList();
+                string crossPart = crossPositions.Count > 0
+                    ? $"|X:{string.Join(",", crossPositions.OrderBy(p => p))}"
+                    : "";
+
                 if (!dedupedOpenings.Any())
-                    return $"{thkMm}";
+                    return $"{thkMm}{crossPart}";
 
                 var sigs = dedupedOpenings.Select(o =>
                 {
@@ -933,7 +1142,7 @@ namespace DAN_Plugin
                     return $"{posL},{wid}";
                 }).OrderBy(s => s).ToList();
 
-                return $"{thkMm}|{string.Join(";", sigs)}";
+                return $"{thkMm}|{string.Join(";", sigs)}{crossPart}";
             }
 
             // Группируем стены по этажу (одинаковая нижняя отметка ±50мм) и сортируем по Z.
@@ -964,20 +1173,22 @@ namespace DAN_Plugin
 
             var wallPlan = new List<(Wall wall, bool isNew, int sectionIdx, int refToIdx)>();
             var sectionFloorWalls = new Dictionary<int, List<Wall>>();  // sectionIdx → все стены этажа
+            // Ключ этажа → индекс его разреза. Раньше сравнивали только с ПРЕДЫДУЩИМ этажом
+            // (lastKey) — если этаж N совпадал с этажом N-2, а не N-1, для него всё равно
+            // создавался новый разрез. Теперь сверяем с ЛЮБЫМ уже встреченным уникальным ключом.
+            var keyToSectionIdx = new Dictionary<string, int>();
             int sectionCounter = 0;
-            int lastNewSectionIdx = -1;
-            string lastKey = null;
 
             foreach (var floorWalls in floorGroups)
             {
                 string key = FloorKey(floorWalls);
-                bool isNew = key != lastKey;
+                bool isNew = !keyToSectionIdx.TryGetValue(key, out int matchedSectionIdx);
 
                 if (isNew)
                 {
                     sectionCounter++;
-                    lastNewSectionIdx = sectionCounter;
-                    lastKey = key;
+                    matchedSectionIdx = sectionCounter;
+                    keyToSectionIdx[key] = sectionCounter;
                 }
 
                 // Репрезентативная стена для создания разреза — самая длинная прямая стена этажа
@@ -996,7 +1207,7 @@ namespace DAN_Plugin
                 else
                 {
                     foreach (Wall w in floorWalls)
-                        wallPlan.Add((w, false, -1, lastNewSectionIdx));
+                        wallPlan.Add((w, false, -1, matchedSectionIdx));
                 }
             }
 
@@ -1208,8 +1419,11 @@ namespace DAN_Plugin
 
             double offset = UnitUtils.ConvertToInternalUnits(200, UnitTypeId.Millimeters);
             double depth = section.Origin.DotProduct(viewDir);
-            double leftProj = globalMinRight;
-            double rightProj = globalMaxRight;
+            // Линия разрыва длиннее габарита стен на 400мм с каждой стороны — чтобы заметно
+            // выступала за края, а не заканчивалась ровно по краю крайней стены.
+            double sideExtra = UnitUtils.ConvertToInternalUnits(400, UnitTypeId.Millimeters);
+            double leftProj = globalMinRight - sideExtra;
+            double rightProj = globalMaxRight + sideExtra;
 
             XYZ MakePtLeft(double z) => rightVec.Multiply(leftProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
             XYZ MakePtRight(double z) => rightVec.Multiply(rightProj) + viewDir.Multiply(depth) + XYZ.BasisZ.Multiply(z);
@@ -1552,6 +1766,26 @@ namespace DAN_Plugin
                 {
                     try
                     {
+                        // Типовой шаг — наиболее частый интервал по ВСЕЙ цепочке, а не шаг
+                        // соседнего сегмента: рядом с конкретным разрывом сосед может оказаться
+                        // нетиповым этажом, тогда локальный шаг не делит span на count без
+                        // остатка, и префикс для ЭТОГО разрыва не проставляется — при этом на
+                        // другом разрыве, где сосед типовой, всё работает (см. тот же фикс
+                        // выше, в расчёте annotFaceData для аннотации «Высотная отметка»).
+                        double typicalChainStep = 0;
+                        if (sortedFaces.Count > 1)
+                        {
+                            double stepBucket = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+                            var diffs = new List<double>();
+                            for (int k = 1; k < sortedFaces.Count; k++)
+                                diffs.Add(sortedFaces[k].Z - sortedFaces[k - 1].Z);
+                            typicalChainStep = diffs
+                                .GroupBy(d => Math.Round(d / stepBucket))
+                                .OrderByDescending(g => g.Count())
+                                .First()
+                                .Average();
+                        }
+
                         int sIdx = 0;
                         foreach (DimensionSegment seg in dim.Segments)
                         {
@@ -1561,18 +1795,18 @@ namespace DAN_Plugin
                                 FaceData fB = sortedFaces[sIdx + 1];
                                 if (breakZones.Any(hz => fA.Z < hz.bottom && fB.Z > hz.top))
                                 {
-                                    // Типовой шаг — интервал соседнего видимого сегмента
-                                    double step = sIdx > 0
+                                    double localStep = sIdx > 0
                                         ? sortedFaces[sIdx].Z - sortedFaces[sIdx - 1].Z
                                         : sIdx + 2 < sortedFaces.Count
                                             ? sortedFaces[sIdx + 2].Z - sortedFaces[sIdx + 1].Z
                                             : 0;
+                                    double step = typicalChainStep > 1e-6 ? typicalChainStep : localStep;
 
                                     if (step > 1e-6)
                                     {
                                         double span = fB.Z - fA.Z;
                                         int count = (int)Math.Round(span / step);
-                                        double tolerance = UnitUtils.ConvertToInternalUnits(1, UnitTypeId.Millimeters);
+                                        double tolerance = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
                                         if (count > 0 && Math.Abs(count * step - span) < tolerance)
                                         {
                                             int stepMm = (int)Math.Round(
@@ -1805,7 +2039,7 @@ namespace DAN_Plugin
                     catch { continue; }
                     if (loops == null || loops.Count == 0) continue;
 
-                    var boxes = new List<(double mn, double mx, double bz, double tz, double range)>();
+                    var boxes = new List<(double mn, double mx, double bz, double tz)>();
                     foreach (CurveLoop loop in loops)
                     {
                         double mn = double.MaxValue, mx = double.MinValue, bz = double.MaxValue, tz = double.MinValue;
@@ -1818,21 +2052,58 @@ namespace DAN_Plugin
                                 if (p.Z < bz) bz = p.Z;
                                 if (p.Z > tz) tz = p.Z;
                             }
-                        boxes.Add((mn, mx, bz, tz, mx - mn));
+                        boxes.Add((mn, mx, bz, tz));
                     }
 
-                    // внешний контур — с наибольшим размахом
-                    double maxRange = boxes.Max(b => b.range);
-                    int outerIdx = boxes.FindIndex(b => Math.Abs(b.range - maxRange) < 1e-9);
+                    double edgeTol = UnitUtils.ConvertToInternalUnits(30, UnitTypeId.Millimeters);
 
-                    // Замкнутые проёмы — все внутренние контуры
+                    // Вложенность: loop[a] — настоящая "дырка" (проём), если её габарит
+                    // ЦЕЛИКОМ внутри loop[b]. Раньше "внешним" считался просто loop с
+                    // наибольшим размахом (mx-mn), а ВСЁ остальное — дыркой; это ломалось,
+                    // когда проём режет стену насквозь по высоте (и толщине) — грань тогда
+                    // распадается на НЕСКОЛЬКО НЕ ВЛОЖЕННЫХ друг в друга петель (левая
+                    // колонна материала, правая колонна), и меньшая из них ошибочно
+                    // принималась за проём, хотя это тоже сплошной материал (см. WallGeomKey
+                    // — там та же проблема была исправлена аналогично).
+                    bool IsNestedIn(int a, int b) =>
+                        a != b &&
+                        boxes[a].mn >= boxes[b].mn - edgeTol && boxes[a].mx <= boxes[b].mx + edgeTol &&
+                        boxes[a].bz >= boxes[b].bz - edgeTol && boxes[a].tz <= boxes[b].tz + edgeTol;
+
+                    var topLevel = new List<int>();
+                    for (int a = 0; a < boxes.Count; a++)
+                    {
+                        bool nested = false;
+                        for (int b = 0; b < boxes.Count; b++)
+                            if (IsNestedIn(a, b)) { nested = true; break; }
+                        if (!nested) topLevel.Add(a);
+                    }
+
+                    // Замкнутые проёмы — вложенные петли (обычные островные вырезы)
                     for (int li = 0; li < boxes.Count; li++)
-                        if (li != outerIdx)
+                        if (!topLevel.Contains(li))
                             result.Add((boxes[li].mn, boxes[li].mx, boxes[li].bz, boxes[li].tz));
 
-                    // Разомкнутые проёмы — прямоугольные выемки снизу во внешнем контуре
-                    if (outerIdx >= 0)
-                        AddBottomNotches(loops[outerIdx], rightVec, result);
+                    // Разомкнутые выемки снизу — только когда грань не распалась на части
+                    if (topLevel.Count == 1)
+                        AddBottomNotches(loops[topLevel[0]], rightVec, result);
+
+                    // Несколько верхнеуровневых силуэтов на одной грани (проём режет стену
+                    // насквозь по высоте и толщине) — зазор между соседними (по R) и есть сам проём.
+                    if (topLevel.Count >= 2)
+                    {
+                        var cols = topLevel.Select(i => boxes[i]).OrderBy(b => b.mn).ToList();
+                        double zOverlapTol = UnitUtils.ConvertToInternalUnits(50, UnitTypeId.Millimeters);
+                        for (int ci = 0; ci < cols.Count - 1; ci++)
+                        {
+                            var left = cols[ci]; var right = cols[ci + 1];
+                            if (right.mn - left.mx < edgeTol) continue;
+                            double ovBz = Math.Max(left.bz, right.bz);
+                            double ovTz = Math.Min(left.tz, right.tz);
+                            if (ovTz - ovBz > zOverlapTol)
+                                result.Add((left.mx, right.mn, ovBz, ovTz));
+                        }
+                    }
                 }
             }
 
@@ -1857,7 +2128,8 @@ namespace DAN_Plugin
         /// вставки. Работает для прямоугольных проёмов, выровненных по стене.
         /// </summary>
         private int CreateOpeningDimensions(Document doc, ViewSection section, Wall wall,
-            XYZ rightVec, XYZ viewDir, List<(double bottom, double top)> hiddenZones)
+            XYZ rightVec, XYZ viewDir, List<(double bottom, double top)> hiddenZones,
+            FamilySymbol openingNodeSymbol = null)
         {
             // Проёмы ищем по геометрии стены: вырезы в профиле (внутренние контуры
             // лицевой грани) и, дополнительно, вставки (двери/окна/проёмы-вставки).
@@ -1955,6 +2227,28 @@ namespace DAN_Plugin
                 if (hiddenZones.Any(z => oTopZ > z.bottom && oTopZ < z.top)) continue;
                 if (hiddenZones.Any(z => oBottomZ > z.bottom && oBottomZ < z.top)) continue;
 
+                // Элемент узла проёма — в левый нижний угол, "Ширина"/"Глубина" = размерам проёма.
+                if (openingNodeSymbol != null)
+                {
+                    try
+                    {
+                        XYZ nodePt = MakePt(oMinProj, oBottomZ);
+                        double widthFt = oMaxProj - oMinProj;
+                        double heightFt = oTopZ - oBottomZ;
+
+                        FamilyInstance nodeInst = openingNodeSymbol.Family.FamilyPlacementType == FamilyPlacementType.ViewBased
+                            ? doc.Create.NewFamilyInstance(nodePt, openingNodeSymbol, section)
+                            : doc.Create.NewFamilyInstance(nodePt, openingNodeSymbol, StructuralType.NonStructural);
+
+                        if (nodeInst != null)
+                        {
+                            SetOpeningNodeParam(nodeInst, "Ширина", widthFt);
+                            SetOpeningNodeParam(nodeInst, "Глубина", heightFt);
+                        }
+                    }
+                    catch (Exception ex) { _warnings.Add($"Элемент узла проёма, стена Id={wall.Id}: {ex.Message}"); }
+                }
+
                 Reference openLeft = NearestVert(oMinProj);
                 Reference openRight = NearestVert(oMaxProj);
                 Reference openBottom = NearestHoriz(oBottomZ);
@@ -2044,6 +2338,25 @@ namespace DAN_Plugin
             }
 
             return openingBoxes.Count;
+        }
+
+        // Параметр "Ширина"/"Глубина" элемента узла проёма — internalVal уже в футах (длина).
+        private static void SetOpeningNodeParam(FamilyInstance inst, string name, double internalVal)
+        {
+            Parameter p = inst.LookupParameter(name);
+            if (p == null || p.IsReadOnly) return;
+            switch (p.StorageType)
+            {
+                case StorageType.Double:
+                    p.Set(internalVal);
+                    break;
+                case StorageType.Integer:
+                    p.Set((int)Math.Round(UnitUtils.ConvertFromInternalUnits(internalVal, UnitTypeId.Millimeters)));
+                    break;
+                case StorageType.String:
+                    p.Set(((int)Math.Round(UnitUtils.ConvertFromInternalUnits(internalVal, UnitTypeId.Millimeters))).ToString());
+                    break;
+            }
         }
 
         /// <summary>

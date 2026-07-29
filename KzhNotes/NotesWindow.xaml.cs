@@ -1,4 +1,4 @@
-// NotesWindow.xaml.cs
+﻿// NotesWindow.xaml.cs
 // Немодальное окно: работает со СНИМКОМ листов (без Revit API в UI-потоке).
 // Любое обращение к модели — только через RevitEventBridge.Run(...).
 
@@ -46,7 +46,7 @@ namespace KzhNotes
 
         private List<SheetInfo> _snapshot = new List<SheetInfo>();
         private List<SheetInfo> _selInfos = new List<SheetInfo>();   // SheetInfo выбранных листов
-        private List<int> _selIds = new List<int>();                 // ElementId.IntegerValue выбранных листов
+        private List<long> _selIds = new List<long>();                // ElementId.IntValue() выбранных листов
 
         private readonly ObservableCollection<ItemVM> _items = new ObservableCollection<ItemVM>();
         private List<NoteSet> _sets = new List<NoteSet>();
@@ -352,7 +352,7 @@ namespace KzhNotes
                 _bridge.Run(app =>
                 {
                     var doc = app.ActiveUIDocument.Document;
-                    var sheets = ids.Select(id => doc.GetElement(new ElementId(id)) as ViewSheet)
+                    var sheets = ids.Select(id => doc.GetElement(ElementIdCompat.MakeElementId(id)) as ViewSheet)
                                     .Where(s => s != null).ToList();
                     var rep = NotesAppService.ApplySetToSheets(doc, sheets, set, snap);
                     Dispatcher.Invoke(() => ShowReport(rep, "Применён набор «" + set.Name + "»"));
@@ -371,7 +371,7 @@ namespace KzhNotes
                 var doc = uidoc.Document;
                 var snap = NotesAppService.BuildSnapshot(doc);
                 var sheets = NotesAppService.GetSelectedSheets(uidoc);
-                var ids = sheets.Select(s => s.Id.IntegerValue).ToList();
+                var ids = sheets.Select(s => (long)s.Id.IntValue()).ToList();
                 var infos = sheets.Select(s => new SheetInfo(s.SheetNumber, s.Name)).ToList();
                 SheetComposition comp = sheets.Count == 1 ? NotesStorage.Read(sheets[0]) : null;
 
@@ -379,7 +379,7 @@ namespace KzhNotes
             });
         }
 
-        private void ApplyRefresh(List<SheetInfo> snap, List<int> ids, List<SheetInfo> infos, SheetComposition comp)
+        private void ApplyRefresh(List<SheetInfo> snap, List<long> ids, List<SheetInfo> infos, SheetComposition comp)
         {
             _snapshot = snap; _selIds = ids; _selInfos = infos;
 
@@ -412,7 +412,7 @@ namespace KzhNotes
             _bridge.Run(app =>
             {
                 var doc = app.ActiveUIDocument.Document;
-                var sheet = doc.GetElement(new ElementId(id)) as ViewSheet;
+                var sheet = doc.GetElement(ElementIdCompat.MakeElementId(id)) as ViewSheet;
                 if (sheet == null) return;
                 var rep = NotesAppService.ApplyAndSave(doc, sheet, items, snap);
                 Dispatcher.Invoke(() => ShowReport(rep, "Записан лист " + sheet.SheetNumber));

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -11,13 +12,28 @@ namespace RevitKJChecklist
     [Transaction(TransactionMode.Manual)]
     public class ChecklistCommand : IExternalCommand
     {
-        // Логины Revit (Application.Username) пользователей с правами проверяющего.
-        // Все остальные открывают чек-лист в режиме исполнителя (только чтение статусов).
-        private static readonly string[] ReviewerLogins =
+        // Логины Revit (Application.Username) пользователей с правами проверяющего —
+        // читаются из файла на сервере (по одному логину на строку), чтобы список можно
+        // было обновлять без пересборки и переустановки плагина. Все остальные открывают
+        // чек-лист в режиме исполнителя (только чтение статусов).
+        private const string ReviewerListPath =
+            @"K:\04_Файлообменник\BIM\Levin Daniil\Проверяющие_NickName.txt";
+
+        private static string[] ReadReviewerLogins()
         {
-            "BIM_Daniil",
-            "Dinmukhammed Kanatov",   // ← замените на реальные логины
-        };
+            try
+            {
+                if (!File.Exists(ReviewerListPath)) return Array.Empty<string>();
+                return File.ReadAllLines(ReviewerListPath, Encoding.UTF8)
+                    .Select(l => l.Trim())
+                    .Where(l => l.Length > 0 && !l.StartsWith("//"))
+                    .ToArray();
+            }
+            catch
+            {
+                return Array.Empty<string>();
+            }
+        }
 
         private static ChecklistWindow _window;
 
@@ -65,7 +81,7 @@ namespace RevitKJChecklist
         }
 
         private static bool IsReviewer(string username) =>
-            Array.Exists(ReviewerLogins, r => string.Equals(r, username, StringComparison.OrdinalIgnoreCase));
+            Array.Exists(ReadReviewerLogins(), r => string.Equals(r, username, StringComparison.OrdinalIgnoreCase));
 
         private static string GetSavePath(Document doc)
         {

@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    MSBuildProjectExtensionsPath/BaseIntermediateOutputPath должны быть заданы ДО
+    импорта Microsoft.Common.props — единственное надёжное место для этого,
+    не трогая сам DAN_Plugin2026.csproj, это Directory.Build.props (см. MSB3540).
+    Условие — чтобы не задеть DAN_Plugin.csproj/Loader.csproj (net48, папка "obj\").
+    Покрывает ОБА проекта 2026 (DAN_Plugin2026, Loader2026) — раньше условие ловило
+    только один из них, и второй (Loader2026) через "obj\" ломал net48-restore.
+  -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('2026'))">
+    <BaseIntermediateOutputPath>obj2026\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>obj2026\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

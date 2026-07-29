@@ -133,26 +133,35 @@ namespace MyPlugin.Loader
             // (сборка грузится из temp, поэтому Assembly.Location там не поможет)
             AppDomain.CurrentDomain.SetData("DAN_PluginDir", LoaderApp.PluginDir);
 
-            AppDomain.CurrentDomain.AssemblyResolve += Resolve;
+            // WPF резолвит pack-URI ресурсов ("/DAN_Plugin;component/...") по ИМЕНИ сборки
+            // через отдельный от LoadFrom контекст загрузки. Если в этот момент отдать
+            // AssemblyResolve другой физической копии DAN_Plugin.dll (из папки плагина),
+            // получаем два разных объекта Assembly с одинаковым именем ("version conflict")
+            // и XamlParseException — ресурс ищут не в том экземпляре, что выполняется.
+            // Поэтому для самого DAN_Plugin возвращаем именно уже загруженный экземпляр.
+            Assembly loaded = null;
+            ResolveEventHandler resolve = (s, args) =>
+            {
+                string name = new AssemblyName(args.Name).Name;
+                if (name == "DAN_Plugin" && loaded != null) return loaded;
+
+                string path = Path.Combine(LoaderApp.PluginDir, name + ".dll");
+                return File.Exists(path) ? Assembly.LoadFrom(path) : null;
+            };
+
+            AppDomain.CurrentDomain.AssemblyResolve += resolve;
             try
             {
-                Assembly asm = Assembly.LoadFrom(tmp);
-                Type t = asm.GetType(typeName)
+                loaded = Assembly.LoadFrom(tmp);
+                Type t = loaded.GetType(typeName)
                     ?? throw new InvalidOperationException($"Тип '{typeName}' не найден в {src}");
                 IExternalCommand cmd = (IExternalCommand)Activator.CreateInstance(t);
                 return cmd.Execute(cd, ref msg, els);
             }
             finally
             {
-                AppDomain.CurrentDomain.AssemblyResolve -= Resolve;
+                AppDomain.CurrentDomain.AssemblyResolve -= resolve;
             }
-        }
-
-        private static Assembly Resolve(object sender, ResolveEventArgs args)
-        {
-            string path = Path.Combine(LoaderApp.PluginDir,
-                new AssemblyName(args.Name).Name + ".dll");
-            return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         }
     }
 

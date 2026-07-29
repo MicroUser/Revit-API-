@@ -1,4 +1,4 @@
-// RevitIntegration.cs
+﻿// RevitIntegration.cs
 // Всё, что касается Revit API: снимок листов, запись в параметр,
 // немодальный мост через ExternalEvent и сервис-операции (записать лист / обновить все).
 // Требует ссылки на RevitAPI.dll и RevitAPIUI.dll.
@@ -78,7 +78,7 @@ namespace KzhNotes
             }
             if (res.Count == 0 && uidoc.ActiveView is ViewSheet act && !act.IsPlaceholder)
                 res.Add(act);
-            return res.GroupBy(s => s.Id.IntegerValue).Select(g => g.First()).ToList();
+            return res.GroupBy(s => s.Id.IntValue()).Select(g => g.First()).ToList();
         }
 
         // ---------- запись в параметр ----------

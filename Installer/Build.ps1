@@ -23,7 +23,7 @@ if (-not (Test-Path $iscc)) {
 
 # ── 2. Сборка плагина (Release) ──────────────────────────────────────────────
 Write-Host "`nСборка DAN_Plugin (Release)..." -ForegroundColor Cyan
-& $msbuild "$root\DAN_Plugin.csproj" /p:Configuration=Release /t:Build /v:minimal
+& $msbuild "$root\DAN_Plugin.sln" /p:Configuration=Release /t:Build /v:minimal
 if ($LASTEXITCODE -ne 0) { Write-Error "MSBuild завершился с ошибкой." }
 Write-Host "Сборка успешна." -ForegroundColor Green
 

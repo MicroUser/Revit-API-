@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# .NET 8 (Revit 2026) build output
+obj2026/
+bin2026/

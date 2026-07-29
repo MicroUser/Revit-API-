@@ -38,6 +38,12 @@ namespace DAN_Plugin
 
     public partial class SettingsWindow : Window
     {
+        // Окно теперь немодальное (см. CreatElevationTags.Execute — открывается через Show()
+        // с ручной прокачкой сообщений, а не ShowDialog()), поэтому штатный DialogResult
+        // использовать нельзя — WPF бросает исключение, если окно не показано через
+        // ShowDialog(). Результат читаем через это свойство после закрытия окна.
+        public bool? Result { get; private set; }
+
         public bool CreateBreak { get; private set; }
         public bool Recreate { get; private set; }
         public bool CreateSections { get; private set; }
@@ -159,13 +165,13 @@ namespace DAN_Plugin
                 }
             }
 
-            DialogResult = true;
+            Result = true;
             Close();
         }
 
         private void BtnCancel_Click(object sender, RoutedEventArgs e)
         {
-            DialogResult = false;
+            Result = false;
             Close();
         }
     }

@@ -92,10 +92,11 @@ namespace RevitKJChecklist
             {
                 var dlg = new SaveFileDialog
                 {
-                    Title      = "Сохранить PDF",
-                    Filter     = "PDF|*.pdf",
-                    FileName   = "Чеклист_КЖ",
-                    DefaultExt = ".pdf"
+                    Title            = "Сохранить PDF",
+                    Filter           = "PDF|*.pdf",
+                    FileName         = "Чеклист_КЖ",
+                    DefaultExt       = ".pdf",
+                    InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
                 };
                 if (dlg.ShowDialog() == true)
                 {

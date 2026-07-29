@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Параллельная сборка Loader под Revit 2026 (.NET 8) — Loader.csproj (net48, 2023) не трогается. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>MyPlugin.Loader</RootNamespace>
+    <AssemblyName>Loader</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <OutputPath>bin2026\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Проект лежит в корне репозитория вместе с DAN_Plugin2026 — автоглоб (WPF/Page,
+         .resx и т.д.) подхватил бы весь чужой исходный код. Loader-у нужен только
+         Loader.cs + явные PNG-ресурсы, поэтому автоглоб просто выключен. -->
+    <EnableDefaultItems>false</EnableDefaultItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Loader.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>C:\Program Files\Autodesk\Revit 2026\RevitAPI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>C:\Program Files\Autodesk\Revit 2026\RevitAPIUI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\cells.png" />
+    <EmbeddedResource Include="Resources\slab_32.png" />
+    <EmbeddedResource Include="Resources\slab_16.png" />
+    <EmbeddedResource Include="Resources\dimension_32.png" />
+    <EmbeddedResource Include="Resources\dimension_16.png" />
+    <EmbeddedResource Include="Resources\Annotation_32.png" />
+    <EmbeddedResource Include="Resources\Annotation_16.png" />
+    <EmbeddedResource Include="Resources\checklist_32.png" />
+    <EmbeddedResource Include="Resources\checklist_16.png" />
+    <EmbeddedResource Include="Resources\pencil_32.png" />
+    <EmbeddedResource Include="Resources\pencil_16.png" />
+  </ItemGroup>
+
+  <!-- Dev-деплой отключён по просьбе — падал с ошибкой "занят другим приложением", когда
+       Revit запущен. Деплой теперь делается вручную/через Add-In Manager.
+  <Target Name="DeployToAddins2026" AfterTargets="Build">
+    <MakeDir Directories="C:\ProgramData\Autodesk\Revit\Addins\2026\DAN_Plugin" Condition="!Exists('C:\ProgramData\Autodesk\Revit\Addins\2026\DAN_Plugin')" />
+    <Exec Command="xcopy /Y &quot;$(TargetPath)&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2026\DAN_Plugin\&quot;" ContinueOnError="true" />
+    <Exec Command="xcopy /Y &quot;$(MSBuildThisFileDirectory)Installer\Manifest2026.addin&quot; &quot;C:\ProgramData\Autodesk\Revit\Addins\2026\&quot;" ContinueOnError="true" />
+  </Target>
+  -->
+
+</Project>

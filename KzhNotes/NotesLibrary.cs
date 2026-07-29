@@ -158,7 +158,7 @@ namespace KzhNotes
             new PunktDef{ Id="Общ-02", Group="Общие", RefsReviewed=true,
                 Body=@"Разрезы 1-1, 2-2 разработаны на {{КЖ role=""{роль}"" scope=""global"" excl=""Лестница"" prep=""лист""}}.",
                 Fields=new List<FieldDef>{ new FieldDef("роль", "Разрез 1-1, 2-2", "Тип разреза",
-                    new List<string>{ "Разрез 1-1, 2-2", "Разрез по зданию" }) } },
+                    new List<string>{ "Разрезы 1-1, 2-2", "Разрез по зданию" }) } },
             new PunktDef{ Id="Общ-03", Group="Общие", RefsReviewed=true, Body=@"Данный лист смотреть совместно с {{СОВМЕСТНО}}." },
             new PunktDef{ Id="Общ-04", Group="Общие", RefsReviewed=true, Body=@"Вентиляционные блоки поэтажно опираются на плиты перекрытия. Узлы установки вентиляционных блоков смотреть на листе {{КЖ role=""Узлы установки вентиляционных блоков"" scope=""global""}}." },
             new PunktDef{ Id="Общ-05", Group="Общие", RefsReviewed=true, Body=@"Вентиляционные блоки поэтажно опираются на плиты перекрытия. Установку выполнить согласно узлам А, Б." },
@@ -188,8 +188,7 @@ namespace KzhNotes
         };
 
         private static readonly JsonSerializerOptions JsonOpt = new JsonSerializerOptions
-        {
-            WriteIndented = true,
+        {            WriteIndented = true,
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
 

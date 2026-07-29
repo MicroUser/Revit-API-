@@ -12,6 +12,7 @@
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -37,6 +38,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
@@ -60,7 +62,7 @@
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Xml" />
     <Reference Include="VCRevitRibbonUtil">
-      <HintPath>..\..\..\Desktop\C#\C#\Тесты\Пробник\bin\Debug\VCRevitRibbonUtil.dll</HintPath>
+      <HintPath>$(UserProfile)\Desktop\VCRevitRibbonUtil.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.Web.WebView2.Core">
       <HintPath>lib\Microsoft.Web.WebView2.Core.dll</HintPath>
@@ -72,6 +74,7 @@
 
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ElementIdCompat.cs" />
     <Compile Include="AssemblytoElementMark.cs" />
     <Compile Include="Debug.cs" />
     <Compile Include="Опалубка стен\ElevationTag.cs" />
@@ -104,6 +107,10 @@
     <Compile Include="Чеклист\WebAssets.cs" />
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
+    <Compile Include="RebarPlacer.cs" />
+    <Compile Include="DxfArmoringImport.cs" />
+    <Compile Include="RebarZones\RebarZonesWindow.cs" />
+    <Compile Include="RebarZones\RebarZonesCommand.cs" />
     <Compile Include="KzhNotes\NotesCommand.cs" />
     <Compile Include="KzhNotes\NotesEngine.cs" />
     <Compile Include="KzhNotes\NotesLibrary.cs" />
@@ -147,6 +154,9 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Чеклист\checklist.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="RebarZones\rebar_zones.html">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.Attributes;
@@ -886,7 +886,7 @@ namespace DAN_Plugin
                     string posStr = pr.LookupParameter("BI_позиция")?.AsString()
                                  ?? pr.LookupParameter("BI_позиция")?.AsInteger().ToString()
                                  ?? "—";
-                    pDiag.AppendLine($"  id={pr.Id.IntegerValue} форма={ps.Name} " +
+                    pDiag.AppendLine($"  id={pr.Id.IntValue()} форма={ps.Name} " +
                                      $"поз={posStr} кол={pr.NumberOfBarPositions}");
                 }
                 diagSb.AppendLine($"\n=== П-шки на виде: {pTotal} ===");
@@ -1006,7 +1006,7 @@ namespace DAN_Plugin
                         pt.TagHeadPosition = tagHead;
                         tagsPlaced++;
                     }
-                    catch (Exception ex) { errors.Add($"П-шка [{pRebar.Id.IntegerValue}]: {ex.Message}"); }
+                    catch (Exception ex) { errors.Add($"П-шка [{pRebar.Id.IntValue()}]: {ex.Message}"); }
                 }
             }
 
@@ -1116,17 +1116,17 @@ namespace DAN_Plugin
 
             // Горизонтальные стержни: solid-рёбра из геометрии без привязки к виду.
             // Это даёт Edge.Reference (глобальные), а не Line.Reference (view-specific) — размер виден после коммита.
-            var hBarEdges = new List<(int elemId, Reference rf, double wCoord, double uCoord)>();
+            var hBarEdges = new List<(long elemId, Reference rf, double wCoord, double uCoord)>();
             // П-шки и вертикальные стержни (fallback когда нет горизонтальных)
-            var pshEdges  = new List<(int elemId, Reference rf, double wCoord, double uCoord)>();
-            var itemEdges = new List<(int elemId, Reference rf, double wCoord, double uCoord)>();
+            var pshEdges  = new List<(long elemId, Reference rf, double wCoord, double uCoord)>();
+            var itemEdges = new List<(long elemId, Reference rf, double wCoord, double uCoord)>();
             if (crossRefSource != "нет")
             {
                 foreach (var item in hItems)
                 {
                     if (item.elem is Rebar rb)
                     {
-                        int eid = rb.Id.IntegerValue;
+                        long eid = rb.Id.IntValue();
                         foreach (var er in GetHorizontalBarSolidEdgeRefs(rb, sectionView, wallDir, upDir))
                             hBarEdges.Add((eid, er.rf, er.wCoord, er.uCoord));
                     }
@@ -1144,7 +1144,7 @@ namespace DAN_Plugin
                         if (shp == null) continue;
                         if (!shp.Name.StartsWith(pPfx, StringComparison.OrdinalIgnoreCase)
                             && !shp.Name.Equals("(форма)21", StringComparison.OrdinalIgnoreCase)) continue;
-                        int eid = rb.Id.IntegerValue;
+                        long eid = rb.Id.IntValue();
                         foreach (var er in GetHorizontalBarSolidEdgeRefs(rb, sectionView, wallDir, upDir))
                             pshEdges.Add((eid, er.rf, er.wCoord, er.uCoord));
                     }
@@ -1155,7 +1155,7 @@ namespace DAN_Plugin
                         {
                             if (item.elem is Rebar rb)
                             {
-                                int eid = rb.Id.IntegerValue;
+                                long eid = rb.Id.IntValue();
                                 foreach (var vr in GetVerticalBarLineRefs(rb, sectionView, wallDir, upDir))
                                     itemEdges.Add((eid, vr.rf, vr.wCoord, vr.uCoord));
                             }
@@ -2089,3 +2089,4 @@ namespace DAN_Plugin
         }
     }
 }
+

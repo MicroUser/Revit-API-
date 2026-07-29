@@ -183,6 +183,20 @@ public class CreateRebarAnnotation : IExternalCommand
                 // (перпендикуляр к rebarDir в плоскости вида)
                 XYZ dimDir = rebarDir.CrossProduct(view.ViewDirection).Normalize();
 
+                // Знак dimDir зависит от направления исходной кривой стержня (rebarDir).
+                // Диагностика показала: у нижней допки rebarDir=(0;1;0) у всех стержней →
+                // dimDir=(1;0;0) одинаково, а у верхней допки стержень чаще всего смоделирован
+                // "зеркально" — rebarDir=(0;-1;0) → dimDir=(-1;0;0). Из-за этого сдвиг марки
+                // (tagPosition = dimOrigin - dimDir*centerOffset, см. ниже) уводит марку верхней
+                // допки в противоположную от нижней сторону. Канонизируем знак dimDir относительно
+                // вида, чтобы формула сдвига давала одинаковый результат для верха и низа.
+                double dimDirDotR = dimDir.DotProduct(view.RightDirection);
+                double dimDirDotU = dimDir.DotProduct(view.UpDirection);
+                bool flipDimDir = Math.Abs(dimDirDotR) >= Math.Abs(dimDirDotU)
+                    ? dimDirDotR < 0
+                    : dimDirDotU < 0;
+                if (flipDimDir) dimDir = dimDir.Negate();
+
                 // 8. ШАГ И КОЛИЧЕСТВО
                 int count = rebar.NumberOfBarPositions;
                 double spacing = 0;
@@ -221,9 +235,44 @@ public class CreateRebarAnnotation : IExternalCommand
                 XYZ dimOrigin = midPoint + dimDir * dimOffset;
                 options.DimensionLineOrigin = dimOrigin;
 
-                double tagOffset = UnitUtils.ConvertToInternalUnits(
-                    centerOffset, UnitTypeId.Millimeters);
-                XYZ tagPosition = dimOrigin - dimDir * tagOffset;
+                // midPoint — это положение ОДНОГО представителя массива (GetCenterlineCurves без
+                // индекса отдаёт геометрию одного стержня, не центр массива), а массив может расти
+                // от него как в +dimDir, так и в -dimDir — направление роста не одинаково у разных
+                // элементов (напр. отличается между плитой и фундаментом), поэтому знак сдвига
+                // нельзя ни угадать, ни зафиксировать константой. Вместо этого находим истинный
+                // центр НАПРЯМУЮ из геометрии: сканируем осевые линии всех стержней массива и берём
+                // середину их фактического диапазона проекций на dimDir — работает независимо от
+                // направления роста.
+                double centerProjOnDim = midPoint.DotProduct(dimDir);
+                try
+                {
+                    Options geomOptsC = new Options
+                    {
+                        View = view,
+                        ComputeReferences = false,
+                        IncludeNonVisibleObjects = true
+                    };
+                    double cMin = double.MaxValue, cMax = double.MinValue;
+                    foreach (GeometryObject go in rebar.get_Geometry(geomOptsC))
+                    {
+                        IEnumerable<GeometryObject> objs = go is GeometryInstance giC
+                            ? giC.GetInstanceGeometry() : Enumerable.Repeat(go, 1);
+                        foreach (GeometryObject o in objs)
+                        {
+                            if (!(o is Line ln)) continue;
+                            XYZ lnDir = (ln.GetEndPoint(1) - ln.GetEndPoint(0)).Normalize();
+                            if (Math.Abs(lnDir.DotProduct(rebarDir)) < 0.9) continue; // только вдоль стержня
+                            XYZ lnMid = (ln.GetEndPoint(0) + ln.GetEndPoint(1)) / 2.0;
+                            double p = lnMid.DotProduct(dimDir);
+                            cMin = Math.Min(cMin, p);
+                            cMax = Math.Max(cMax, p);
+                        }
+                    }
+                    if (cMax > cMin) centerProjOnDim = (cMin + cMax) / 2.0;
+                }
+                catch { }
+
+                XYZ tagPosition = midPoint + dimDir * (centerProjOnDim - midPoint.DotProduct(dimDir));
                 options.TagHeadPosition = tagPosition;
 
                 try
