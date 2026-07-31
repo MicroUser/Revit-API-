@@ -72,6 +72,7 @@ canvas{display:block;width:100%;height:100%}
 .acc{border-color:var(--green)!important;color:var(--green)!important}
 .rej{border-color:#7a3a44!important;color:#e08a95!important}
 .edt{border-color:var(--amber)!important;color:var(--amber)!important}
+.del{border-color:var(--red)!important;color:var(--red)!important}
 .ksel{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
 .kb{font-family:var(--mono);font-size:11px;padding:4px 8px;border-radius:5px;border:1px solid var(--line);background:var(--panel);color:var(--tx2);cursor:pointer}
 .kb:hover{border-color:var(--tx3)}
@@ -128,6 +129,7 @@ canvas{display:block;width:100%;height:100%}
     <div class="tab off"><span class="dot"></span>Низ · Y</div>
   </div>
   <div id="dirbadge">стержни ‖ X · анкеровка ‖ X</div>
+  <button id="loadDxf" style="padding:7px 12px;background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap">📁 DXF</button>
   <div id="spacer"></div>
   <div id="cover"></div>
   <div id="placehint"></div>
@@ -136,11 +138,10 @@ canvas{display:block;width:100%;height:100%}
 <div id="main">
   <div id="cwrap">
     <canvas id="cv"></canvas>
+    <div id="contourWarn" style="display:none;position:absolute;left:50%;top:12px;transform:translateX(-50%);background:#3d1418;border:1px solid var(--red);color:#ff9aa3;padding:8px 14px;border-radius:8px;font-size:12px;font-family:var(--mono);z-index:5;white-space:nowrap"></div>
     <div class="hudbox" id="legend"></div>
     <div id="editbar">
       <span class="lbl" id="ebname"></span>
-      <button class="eb" id="ebStep">+ Ступень на ребре</button>
-      <button class="eb gray" id="ebDel">− Убрать ступень</button>
       <button class="eb gray" id="ebRect">↺ Вернуть прямоугольник</button>
       <button class="eb" id="ebDone">Готово</button>
     </div>
@@ -152,16 +153,32 @@ canvas{display:block;width:100%;height:100%}
       <button class="tool" id="tUndo" disabled>↶ Отменить</button>
       <button class="tool" id="tRedo" disabled>↷ Повторить</button>
       <button class="tool" id="tNew">✚ Новая зона (рамкой)</button>
+      <div class="hudbox" id="newDiamPick" style="display:none">
+        <div style="font-size:11px;color:var(--tx2);margin-bottom:6px">Диаметр новой зоны:</div>
+        <div class="ksel" id="newDiamBtns"></div>
+      </div>
       <button class="tool" id="tMergeB" disabled>⧉ Слить выбранные</button>
       <button class="tool on" id="tNest">⊂ Объединять пересекающиеся — вкл</button>
       <button class="tool" id="tReset">⟲ Сбросить всё к расчёту</button>
       <button class="tool" id="tSettings">⚙ Настройки</button>
       <div class="hudbox" id="settings">
         <b style="font-size:12px">Фоновая арматура</b>
-        <div class="bgsel">
+        <div class="bgsel" id="bgSingle">
           <span class="sl">⌀</span><select id="bgD"></select>
           <span class="sl">шаг</span><select id="bgS"></select>
           <span class="cap" id="bgCap"></span>
+        </div>
+        <div id="bgFound" style="display:none">
+          <div class="bgsel">
+            <span class="sl">низ ⌀</span><select id="bgDBottom"></select>
+            <span class="sl">шаг</span><select id="bgSBottom"></select>
+            <span class="cap" id="bgCapBottom"></span>
+          </div>
+          <div class="bgsel">
+            <span class="sl">верх ⌀</span><select id="bgDTop"></select>
+            <span class="sl">шаг</span><select id="bgSTop"></select>
+            <span class="cap" id="bgCapTop"></span>
+          </div>
         </div>
         <b style="font-size:12px">Анкеровка lₐ = 55d, мм</b>
         <table id="latab"></table>
@@ -184,33 +201,61 @@ canvas{display:block;width:100%;height:100%}
 </div>
 <script>
 "use strict";
-let DATA={cells:[]};
-let cells=DATA.cells;
-const KC={0:'#3a4250',1:'#e8c239',2:'#f0913b',3:'#e5503c',4:'#b3122e',5:'#9b59d0',6:'#5b6ee8',8:'#ff2fd6'};
-const KL={1:'+s200d10',2:'+s200d12',3:'+s200d14',4:'+s200d16',5:'+s200d18',6:'+s200d20',8:'СПЕЦ'};
+let cells=[];
+const KC={0:'#3a4250',1:'#e8c239',2:'#f0913b',3:'#e5503c',4:'#b3122e',5:'#9b59d0',6:'#5b6ee8',7:'#2fb8a8',8:'#ff2fd6'};
+const KL={1:'+s200d10',2:'+s200d12',3:'+s200d14',4:'+s200d16',5:'+s200d18',6:'+s200d20',7:'+s200d22',8:'СПЕЦ'};
 const LABz=z=>z.k===8?'СПЕЦ':'+s'+z.step+'d'+DIAM[z.k];
-const DIAM={1:10,2:12,3:14,4:16,5:18,6:20,8:0};
-const ABAR={8:0.503,10:0.785,12:1.131,14:1.539,16:2.011,18:2.545,20:3.142}; // площадь стержня, см²
-let BGd=10,BGs=200;                                        // фон: диаметр и шаг
-const capBG=()=>+(ABAR[BGd]*1000/BGs).toFixed(2);          // несущая способность фона, см²/м
+const DIAM={1:10,2:12,3:14,4:16,5:18,6:20,7:22,8:0};
+const ABAR={8:0.503,10:0.785,12:1.131,14:1.539,16:2.011,18:2.545,20:3.142,22:3.801}; // площадь стержня, см²
+const BG_DIAMS=[10,12,14,16,18,20,22];       // диаметры, доступные для фоновой (основной) арматуры
+// Фон: диаметр и шаг. Для обычной плиты — один фон (BGd/BGs) на обе грани. Для фундамента (см.
+// IS_FOUNDATION, из C#) — фон верха и низа задаются раздельно (BGdTop/BGdBottom), т.к. у
+// фундамента низ и верх обычно армируются по-разному; дефолт для фундамента — ⌀20, а не ⌀10.
+let BGd=10,BGs=200;
+let IS_FOUNDATION=false;
+let BGdTop=10,BGsTop=200,BGdBottom=10,BGsBottom=200;
+const curBGd=()=>IS_FOUNDATION?(CTX.face==='bottom'?BGdBottom:BGdTop):BGd;
+const curBGs=()=>IS_FOUNDATION?(CTX.face==='bottom'?BGsBottom:BGsTop):BGs;
+const capBG=()=>+(ABAR[curBGd()]*1000/curBGs()).toFixed(2);          // несущая способность фона, см²/м
 const STEPS=[100,200];
 const capOf=(k,st)=>k===8?999:+(capBG()+ABAR[DIAM[k]]*1000/st).toFixed(2);
 // требуется ли допка в ячейке и каким минимальным диаметром (при шаге 200)
 const needAdd=c=>c.a>capBG()+1e-9;
 function needClass(c){if(!needAdd(c))return 0;
   for(const k of KORD){if(k===8)continue;if(capOf(k,200)>=c.a-1e-9)return k;}return 8;}
-const CAP={0:3.9,1:7.86,2:9.58,3:11.62,4:13.98,5:16.65,6:19.64,8:999}; // при шаге 200
-const KORD=[1,2,3,4,5,6,8];
-let LA={10:550,12:660,14:770,16:880,18:990,20:1100};        // анкеровка 55d, мм
+const CAP={0:3.9,1:7.86,2:9.58,3:11.62,4:13.98,5:16.65,6:19.64,7:22.91,8:999}; // при шаге 200
+const KORD=[1,2,3,4,5,6,7,8];
+let LA={10:550,12:660,14:770,16:880,18:990,20:1100,22:1210};        // анкеровка 55d, мм
 const LSTD=[1670,1950,2340,2920,3900,4880,5850,6850,7800,8770,9750,11700]; // ряд длин стержней
 const laOf=z=>((LA[DIAM[z.k]]||600)/1000);   // анкеровка, м
 // z.poly — РЕДАКТИРУЕМАЯ рабочая зона (по КЭ).
-// Стержни = полосы рабочей зоны + анкеровка с двух сторон, длина подобрана из ряда.
+// Стержни = полосы рабочей зоны + анкеровка, длина подобрана из ряда. Если анкеровка с
+// какой-то стороны выходит за контур плиты — там стержень в реальности упирается в край и
+// гнётся (см. RebarPlacer.PlaceBand: Г/П-образный загиб, анкеровка внахлёст не строится) —
+// не рисуем анкеровку с этой стороны (не путать пользователя) и не учитываем её при подборе
+// длины из ряда — только с противоположной (дальней) стороны, как и в C#.
+// Точка внутри материала плиты: внутри внешнего контура И вне всех крупных проёмов
+// (OPENINGS, ≥1000×1000мм — см. RebarZonesCommand.GetFloorOutlineAndOpenings). Нет данных о
+// контуре — считаем, что анкеровку резать не нужно (как и раньше).
+function insideMaterial(x,y){
+  if(FLOOR_OUTLINE.length===0) return true;
+  if(!pip(FLOOR_OUTLINE,x,y)) return false;
+  for(const op of OPENINGS) if(pip(op,x,y)) return false;
+  return true;}
 function barBands(z){const la=laOf(z);
   return bands(z.poly).map(b=>{
-    const need=Math.round((b.x2-b.x1)*1000)+2*Math.round(la*1000);
-    const L=stdLen(need), extra=L?(L-need)/2000:0, add=la+extra;
-    return {x1:b.x1-add,x2:b.x2+add,y1:b.y1,y2:b.y2,std:L,need};});}
+    const midY=(b.y1+b.y2)/2;
+    const edge1=!insideMaterial(b.x1-la,midY);
+    const edge2=!insideMaterial(b.x2+la,midY);
+    const sides=(edge1?0:1)+(edge2?0:1);
+
+    const need=Math.round((b.x2-b.x1)*1000)+sides*Math.round(la*1000);
+    const L=stdLen(need);
+    const extraTotal=L?(L-need)/1000:0;         // общий запас до ряда длин, м
+    const perSide=sides>0?extraTotal/sides:0;   // делится только между сторонами С анкеровкой
+
+    const add1=edge1?0:la+perSide, add2=edge2?0:la+perSide;
+    return {x1:b.x1-add1,x2:b.x2+add2,y1:b.y1,y2:b.y2,std:L,need};});}
 // подбор длины из ряда: нужная длина стержня → ближайшая бо́льшая из ряда
 function stdLen(needMm){for(const L of LSTD)if(L>=needMm-1e-6)return L;return null;}
 // полезная длина зоны при данном диаметре и длине стержня из ряда
@@ -293,7 +338,7 @@ function generateZones(){
       poly:[[x1,y1],[x2,y1],[x2,y2],[x1,y2]],
       flags:(z.n===1?['одиночный КЭ — подтвердить осознанно']:[]).concat(z.k===8?['Aₛ выше шкалы — решить конструктивно']:[])};});}
 function regenerate(keepManual){
-  const manual=keepManual?zones.filter(z=>z.how==='вручную'&&z.state!=='rejected'):[];
+  const manual=keepManual?zones.filter(z=>(z.how==='вручную'||z.how==='копия')&&z.state!=='rejected'):[];
   zones.length=0;generateZones().forEach(z=>zones.push(z));manual.forEach(z=>zones.push(z));
   sel.clear();editZ=-1;}
 const bbox=p=>({x1:Math.min(...p.map(v=>v[0])),x2:Math.max(...p.map(v=>v[0])),y1:Math.min(...p.map(v=>v[1])),y2:Math.max(...p.map(v=>v[1]))});
@@ -311,6 +356,7 @@ function bands(poly){const ys=[...new Set(poly.map(p=>+p[1].toFixed(4)))].sort((
 // plate occupancy
 let X1=0,Y1=0,X2=1,Y2=1,G=0.18,GW=1,GH=1,occ=new Uint8Array(1);
 let FLOOR_OUTLINE=[];   // контур реальной плиты (из Revit) — фон для наглядности
+let OPENINGS=[];         // крупные проёмы (≥1000×1000мм, из Revit) — анкеровка через них не строится
 let GRIDS=[];            // оси проекта (из Revit) — фон для наглядности
 let ISO_X=[],ISO_Y=[];   // «изолинии» — сетка допармирования (середины пролётов осн. арматуры), м
 function computeBounds(){
@@ -408,8 +454,11 @@ function recompute(){uncovered.clear();const az=zones.filter(z=>z.state!=='rejec
     'Примите хотя бы одну зону, чтобы разместить арматуру'+
     (uncovered.size?' · '+uncovered.size+' КЭ без покрытия':'')+(pend?' · '+pend+' зон ждут решения':'');}
 // ── пересчёт классов зон под текущий фон ──
+// z.edited (в т.ч. вручную/копия — им edited тоже true) пропускаем целиком: пользователь уже
+// принял решение по этой зоне (диаметр/шаг/форма), пересчёт не должен молча его перебивать —
+// см. loadState (восстановление полного снимка после переоткрытия окна).
 function recalcZones(){let chg=0,drop=0;
-  zones.forEach(z=>{if(z.state==='rejected')return;
+  zones.forEach(z=>{if(z.state==='rejected'||z.edited)return;
     const st=zoneStat(z);
     const need=st.idx.filter(i=>needAdd(cells[i]));      // ячейки, где допка ещё нужна
     if(!need.length){z.state='rejected';z.dropped='фон перекрывает';drop++;return;}
@@ -440,7 +489,7 @@ function rectPoly(b){
   return [[x1,y1],[x2,y1],[x2,y2],[x1,y2]];}
 function absorbNested(silent){if(!autoNest)return 0;let total=0,pass=true;
   while(pass){pass=false;
-    const act=zones.map((z,i)=>({z,i})).filter(o=>o.z.state!=='rejected'&&o.z.how!=='вручную');
+    const act=zones.map((z,i)=>({z,i})).filter(o=>o.z.state!=='rejected'&&o.z.how!=='вручную'&&o.z.how!=='копия');
     outer:
     for(let a=0;a<act.length;a++)for(let b=a+1;b<act.length;b++){
       const A=act[a].z,B=act[b].z;
@@ -520,6 +569,7 @@ function updHist(){const u=document.getElementById('tUndo'),r=document.getElemen
   r.textContent='↷ Повторить'+(REDO.length?' · '+REDO[REDO.length-1].act:'');}
 function hotkeys(e){
   const c=e.code;
+  if(c==='Escape'&&copyMode){e.preventDefault();e.stopPropagation();cancelCopy();toast('Копирование отменено');return;}
   if(e.ctrlKey||e.metaKey){
     // e.code не зависит от раскладки: в русской Ctrl+Z даёт e.key='я'
     const k=(e.key||'').toLowerCase();
@@ -531,23 +581,71 @@ function hotkeys(e){
     const t=e.target;
     if(t&&(t.tagName==='INPUT'||t.tagName==='SELECT'||t.tagName==='TEXTAREA'))return;
     e.preventDefault();e.stopPropagation();
-    rejectSelected();}}
-// Отклоняет все выбранные (не уже отклонённые) зоны разом — по Del или по кнопке
-// в карточке многовыборного выделения (Ctrl+клик по нескольким зонам).
+    deleteSelected();}}
+// Удаляет все выбранные зоны разом (по Del) — сортировка по убыванию индекса, чтобы
+// splice одной зоны не портил индексы остальных, ещё не удалённых.
+function deleteSelected(){
+  const ids=[...sel].filter(i=>zones[i]);
+  if(!ids.length)return;
+  push(ids.length===1?'удалена '+zones[ids[0]].id:'удалено зон: '+ids.length);
+  ids.sort((a,b)=>b-a).forEach(i=>zones.splice(i,1));
+  sel.clear();editZ=-1;recompute();sync();
+  toast(ids.length===1?'Зона удалена':'Удалено зон: '+ids.length);}
+// Отклоняет все выбранные (не уже отклонённые) зоны разом — по кнопке в карточке
+// многовыборного выделения (Ctrl+клик по нескольким зонам).
+// «Отклонить» — просто отменяет принятие (state вернётся в 'pending'), зона остаётся видна
+// на схеме и в списке. Настоящее 'rejected' (скрыто) используется только системой —
+// авто-снятие зоны фоном (см. recalcZones) и поглощение при слиянии (см. absorbNested).
 function rejectSelected(){
-  const ids=[...sel].filter(i=>zones[i]&&zones[i].state!=='rejected');
+  const ids=[...sel].filter(i=>zones[i]&&zones[i].state!=='pending');
   if(!ids.length)return;
   push(ids.length===1?'отклонена '+zones[ids[0]].id:'отклонено зон: '+ids.length);
-  ids.forEach(i=>zones[i].state='rejected');
-  sel.clear();editZ=-1;recompute();sync();
+  ids.forEach(i=>zones[i].state='pending');
+  editZ=-1;recompute();sync();
   toast(ids.length===1?'Зона отклонена — покрытие пересчитано':'Отклонено зон: '+ids.length+' — покрытие пересчитано');}
+// Принимает все выбранные (ещё не принятые) зоны разом — парная к rejectSelected,
+// для кнопки «✓ Принять все» в карточке многовыборного выделения.
+function acceptSelected(){
+  const ids=[...sel].filter(i=>zones[i]&&zones[i].state!=='accepted');
+  if(!ids.length)return;
+  push(ids.length===1?'принята '+zones[ids[0]].id:'принято зон: '+ids.length);
+  ids.forEach(i=>zones[i].state='accepted');
+  editZ=-1;recompute();sync();
+  toast(ids.length===1?'Зона принята':'Принято зон: '+ids.length);}
+// Полное удаление зоны из массива (в отличие от «Отклонить» — это необратимо вне истории
+// Ctrl+Z, зона пропадает из списка целиком, а не просто помечается неактивной).
+// Сдвигает индексы в sel/editZ, т.к. splice меняет позиции всех зон после i.
+function deleteZone(i){
+  if(!zones[i])return;
+  push('удалена '+zones[i].id);
+  zones.splice(i,1);
+  sel=new Set([...sel].filter(x=>x!==i).map(x=>x>i?x-1:x));
+  if(editZ===i)editZ=-1;else if(editZ>i)editZ--;
+  recompute();sync();
+  toast('Зона удалена');}
 window.addEventListener('keydown',hotkeys,true);
 document.addEventListener('keydown',hotkeys,true);
 // окно предпросмотра может не иметь фокуса до первого клика
 window.addEventListener('load',()=>{try{window.focus();}catch(_){}}); 
 cv.addEventListener('pointerdown',()=>{try{window.focus();}catch(_){}});
 // interaction state
-let sel=new Set(),hoverZ=-1,editZ=-1,drag=null,panP=null,pendStep=null,newMode=false,newRect=null;
+let sel=new Set(),hoverZ=-1,editZ=-1,drag=null,panP=null,newMode=false,newRect=null;
+// Создание новой зоны — сначала выбор диаметра (pickingDiam, панель newDiamPick), потом рисование
+// рамки (newMode, как раньше): чтобы не приходилось поправлять диаметр ПОСЛЕ авто-подбора по
+// максимуму КЭ внутри рамки — пользователь явно указывает его заранее.
+let pickingDiam=false,newDiam=null;
+// ── копирование зоны: выбор зоны → «⧉ Копия» → клик на плите ставит перенесённую копию
+// (сохраняет форму целиком, включая ручные изломы Г/П, диаметр, шаг) — чтобы не рисовать
+// повторяющуюся (симметричную) зону заново.
+let copyMode=false,copySrc=null,copyPt=null;
+function startCopy(z){
+  if(newMode||pickingDiam){newMode=false;pickingDiam=false;newDiam=null;setNewBtn();}
+  copySrc=z;copyMode=true;copyPt=null;
+  if(editZ>=0)editZ=-1;
+  sync();
+  cv.style.cursor='crosshair';
+  toast('Кликайте на плите, чтобы ставить копии '+z.id+' · сколько угодно раз · Esc — выход из режима');}
+function cancelCopy(){copyMode=false;copySrc=null;copyPt=null;cv.style.cursor='grab';sync();}
 function zAt(x,y){let best=-1,ba=1e18;zones.forEach((z,i)=>{if(z.state==='rejected')return;
   if(pip(z.poly,x,y)){const b=bbox(z.poly),a=(b.x2-b.x1)*(b.y2-b.y1);if(a<ba){ba=a;best=i;}}});return best;}
 function edgesOf(z){const p=z.poly,e=[];for(let i=0;i<p.length;i++){const a=p[i],b=p[(i+1)%p.length];
@@ -568,9 +666,23 @@ cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);const px=e.offsetX,py=e.offsetY;
   if(newMode){const x=Math.round(WX(px)/SNAP)*SNAP,y=nearestIsoY(WY(py));
     newRect={x1:x,y1:y,x2:x,y2:y};drag={mode:'new'};return;}
-  if(pendStep){const eh=edgeHit(px,py);if(eh){push('ступень на '+zones[editZ].id);insertStep(zones[editZ],eh,WX(px),WY(py));pendStep=null;
-    document.getElementById('ebStep').classList.remove('gray');toast('Ступень добавлена — тяните новое ребро');
-    recompute();renderCard();renderList();draw();return;}}
+  if(copyMode&&copySrc){
+    const b=bbox(copySrc.poly),cx=(b.x1+b.x2)/2,cy=(b.y1+b.y2)/2;
+    const tx=Math.round(WX(px)/SNAP)*SNAP,ty=nearestIsoY(WY(py));
+    const dx=tx-cx,dy=ty-cy;
+    const poly=copySrc.poly.map(p=>[Math.round((p[0]+dx)/SNAP)*SNAP,Math.round(nearestIsoY(p[1]+dy)*1000)/1000]);
+    push('копия '+copySrc.id);
+    const st=zoneStat({poly}),need=st.idx.filter(ix=>needAdd(cells[ix]));
+    const nz={id:'d'+DIAM[copySrc.k]+'-C'+zones.length,k:copySrc.k,k0:copySrc.k,step:copySrc.step,avg:copySrc.avg,
+      n:need.length,am:need.length?+Math.max(...need.map(ix=>cells[ix].a)).toFixed(2):copySrc.am,
+      state:'pending',edited:true,how:'копия',
+      flags:need.length===1?['одиночный КЭ — подтвердить осознанно']:[],poly};
+    zones.push(nz);
+    // copyMode/copySrc намеренно НЕ сбрасываем — можно ставить сколько угодно копий подряд,
+    // пока пользователь сам не выйдет (Esc / повторный клик «⧉ Копия» / другой инструмент).
+    absorbNested();recompute();sync();
+    toast('Копия размещена: '+nz.id+' · кликайте ещё или Esc для выхода');
+    return;}
   const eh=edgeHit(px,py);
   if(eh){push('правка границы '+zones[editZ].id);drag={mode:'edge',e:eh};return;}
   const zi=zAt(WX(px),WY(py));
@@ -578,40 +690,44 @@ cv.addEventListener('pointerdown',e=>{
     if(editZ>=0&&editZ!==zi)editZ=-1;
     sync();drag={mode:'maybe'};panP=[px,py];}
   else{if(!e.ctrlKey){sel.clear();editZ=-1;sync();}drag={mode:'pan'};panP=[px,py];}});
-cv.addEventListener('dblclick',e=>{const zi=zAt(WX(e.offsetX),WY(e.offsetY));
-  if(zi>=0){sel.clear();sel.add(zi);editZ=zi;sync();toast('Режим формы: тяните рёбра, «+ Ступень» — излом');}});
+cv.addEventListener('dblclick',e=>{
+  if(copyMode)return;   // не входить в режим формы — второй клик двойного клика уже поставил копию
+  const zi=zAt(WX(e.offsetX),WY(e.offsetY));
+  if(zi>=0){sel.clear();sel.add(zi);editZ=zi;sync();toast('Режим формы: тяните рёбра.');}});
 cv.addEventListener('pointermove',e=>{const px=e.offsetX,py=e.offsetY;
   document.getElementById('coords').textContent='x '+WX(px).toFixed(2)+' · y '+WY(py).toFixed(2)+' м';
+  if(copyMode&&copySrc){copyPt=[Math.round(WX(px)/SNAP)*SNAP,nearestIsoY(WY(py))];cv.style.cursor='crosshair';draw();return;}
   if(drag&&drag.mode==='new'){newRect.x2=Math.round(WX(px)/SNAP)*SNAP;
     newRect.y2=nearestIsoY(WY(py));draw();return;}
   if(drag&&drag.mode==='edge'){const z=zones[editZ],eg=drag.e,p=z.poly;
     const i1=eg.i,i2=(eg.i+1)%p.length;
     if(eg.vert){const v=Math.round(WX(px)/SNAP)*SNAP;p[i1][0]=v;p[i2][0]=v;}
     else{const v=Math.round(nearestIsoY(WY(py))*1000)/1000;p[i1][1]=v;p[i2][1]=v;}
-    z.edited=true;if(z.state==='accepted')z.state='pending';
+    z.edited=true;z.placed=false;if(z.state==='accepted')z.state='pending';
     recompute();renderCard();renderList();draw();return;}
   if(drag&&(drag.mode==='pan'||drag.mode==='maybe')){
     if(drag.mode==='maybe'&&Math.hypot(px-panP[0],py-panP[1])<4)return;
     drag.mode='pan';ox+=px-panP[0];oy+=py-panP[1];panP=[px,py];
     if(anchor)anchor=null;tScale=scale;draw();return;}
   const eh=edgeHit(px,py);
-  cv.style.cursor=pendStep?'crosshair':(eh?(eh.vert?'ew-resize':'ns-resize'):'grab');
+  cv.style.cursor=eh?(eh.vert?'ew-resize':'ns-resize'):'grab';
   const h=zAt(WX(px),WY(py));if(h!==hoverZ){hoverZ=h;draw();}});
 cv.addEventListener('pointerup',()=>{
   if(drag&&drag.mode==='edge'){drag=null;if(absorbNested()){recompute();sync();}return;}
   if(drag&&drag.mode==='new'&&newRect){const r=newRect;
     const x1=Math.min(r.x1,r.x2),x2=Math.max(r.x1,r.x2),y1=Math.min(r.y1,r.y2),y2=Math.max(r.y1,r.y2);
     newRect=null;drag=null;
-    if(x2-x1<0.2||y2-y1<0.2){newMode=false;setNewBtn();draw();toast('Зона слишком мала — не создана');return;}
+    if(x2-x1<0.2||y2-y1<0.2){newMode=false;newDiam=null;setNewBtn();draw();toast('Зона слишком мала — не создана');return;}
     push('новая зона');
     const poly=[[x1,y1],[x2,y1],[x2,y2],[x1,y2]];
     const inn=cells.filter(c=>pip(poly,c.x,c.y));
-    const k=Math.max(1,...inn.map(c=>c.k));
-    const nz={id:'d'+DIAM[k]+'-U'+zones.length,k,k0:k,step:200,avg:false,n:inn.filter(c=>c.k>0).length,
+    const k=newDiam;                                   // выбран заранее, см. newDiamBtns
+    const autoK=inn.length?Math.max(1,...inn.map(c=>c.k)):1;   // для подсказки "изменён вручную"
+    const nz={id:'d'+DIAM[k]+'-U'+zones.length,k,k0:autoK,step:200,avg:false,n:inn.filter(c=>c.k>0).length,
       am:inn.length?Math.max(...inn.map(c=>c.a)):0,state:'pending',edited:true,flags:['зона создана вручную'],poly,how:'вручную'};
-    zones.push(nz);sel.clear();sel.add(zones.length-1);editZ=zones.length-1;newMode=false;setNewBtn();
+    zones.push(nz);sel.clear();sel.add(zones.length-1);editZ=zones.length-1;newMode=false;newDiam=null;setNewBtn();
     absorbNested();recompute();sync();
-    toast('Создана '+nz.id+' · класс по максимуму внутри: '+KL[k]+' · Aₛ пик '+nz.am+' — при необходимости смените диаметр');
+    toast('Создана '+nz.id+' · '+KL[k]+' · Aₛ пик '+nz.am);
     return;}
   drag=null;});
 // ── плавный зум к курсору ──
@@ -632,20 +748,7 @@ function zoomStep(){
   else zoomRAF=requestAnimationFrame(zoomStep);
   if(anchor){ox=anchor.px-anchor.wx*scale;oy=anchor.py+anchor.wy*scale;}
   draw();}
-// insert step on edge -> creates notch
-function insertStep(z,eg,cx,cy){const p=z.poly,i=eg.i,d=0.2;
-  const a=p[i],b=p[(i+1)%p.length];let np;
-  if(eg.vert){
-    const y=nearestIsoY(cy),h=0.4,dir=(a[1]<b[1])?1:-1;
-    const y1=y-h/2*dir,y2=y+h/2*dir,x=a[0];
-    const inx=(bbox(p).x1===x)?d:-d;
-    np=[[x,y1],[x+inx,y1],[x+inx,y2],[x,y2]];}
-  else{const x=Math.round(cx/SNAP)*SNAP,w=0.4,dir=(a[0]<b[0])?1:-1;
-    const x1=x-w/2*dir,x2=x+w/2*dir,y=a[1];
-    const iny=(bbox(p).y1===y)?d:-d;
-    np=[[x1,y],[x1,y+iny],[x2,y+iny],[x2,y]];}
-  p.splice(i+1,0,...np);z.edited=true;if(z.state==='accepted')z.state='pending';}
-function unstep(z){const b=bbox(z.poly);z.poly=[[b.x1,b.y1],[b.x2,b.y1],[b.x2,b.y2],[b.x1,b.y2]];z.edited=true;}
+function unstep(z){const b=bbox(z.poly);z.poly=[[b.x1,b.y1],[b.x2,b.y1],[b.x2,b.y2],[b.x1,b.y2]];z.edited=true;z.placed=false;}
 // ── draw ──
 let showAnchor=true,showIso=true,valMode='auto';
 function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWidth,cv.clientHeight);
@@ -670,6 +773,11 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
     FLOOR_OUTLINE.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
     ctx.closePath();ctx.setLineDash([9,5]);ctx.lineWidth=1.6;
     ctx.strokeStyle='#3ecf8e';ctx.globalAlpha=.7;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);}
+  // фон: крупные проёмы (≥1000×1000мм) — через них анкеровка не строится, см. insideMaterial
+  OPENINGS.forEach(op=>{if(op.length<2)return;ctx.beginPath();
+    op.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
+    ctx.closePath();ctx.setLineDash([9,5]);ctx.lineWidth=1.6;
+    ctx.strokeStyle='#ff8a3e';ctx.globalAlpha=.7;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);});
   cells.forEach((c,i)=>{ctx.beginPath();c.p.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
     ctx.closePath();ctx.fillStyle=KC[c.k]||'#555';ctx.globalAlpha=c.k?0.85:0.5;ctx.fill();ctx.globalAlpha=1;
     if(uncovered.has(i)){
@@ -714,19 +822,24 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
     ctx.lineWidth=isEd?2.8:(isSel?2.4:(z.state==='accepted'?2:1.6));
     if(z.state==='pending')ctx.setLineDash(z.flags.length?[3,3]:[7,4]);   // предложена — пунктир, с флагом — частый
     ctx.stroke();ctx.setLineDash([]);
-    // принята — диагональная штриховка цветом диаметра
-    if(z.state==='accepted'){ctx.save();ctx.clip();
-      const b0=bbox(z.poly),px1=SX(b0.x1),px2=SX(b0.x2),py1=SY(b0.y2),py2=SY(b0.y1);
-      const gap=9;ctx.strokeStyle=kc;ctx.globalAlpha=.55;ctx.lineWidth=1;ctx.beginPath();
-      const h=py2-py1;
-      // диагонали строятся по общей сетке x+y=k·gap (от начала координат канвы), а не от
-      // границы конкретной зоны — иначе при любом изменении габарита узор «съезжает»
-      const k0=Math.floor((px1+py1)/gap),k1=Math.ceil((px2+py2)/gap);
-      for(let k=k0;k<=k1;k++){const d=k*gap-py2;ctx.moveTo(d,py2);ctx.lineTo(d+h,py1);}
-      ctx.stroke();ctx.globalAlpha=.10;ctx.fillStyle=kc;ctx.fill();ctx.restore();}
-    if(z.avg){ctx.setLineDash([2,3]);ctx.lineWidth=1;ctx.strokeStyle=z.chk&&z.chk.ok?kc:'#ff4d5e';
+    // принята — сплошная заливка цветом диаметра, на весь полигон зоны (раньше была
+    // диагональная штриховка, потом заливка только по нуждающимся КЭ — нечитаемо/непонятно).
+    if(z.state==='accepted'){
+      ctx.save();ctx.beginPath();
+      z.poly.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));ctx.closePath();
+      ctx.fillStyle=kc;ctx.fill();ctx.restore();}
+    if(z.avg){
+      // Path canvas НЕ входит в save/restore — после штриховки выше текущим путём остаются
+      // её диагональные линии, а не контур зоны. Перестраиваем path из z.poly явно, иначе
+      // ниже обводится штриховка (без клипа) вместо сдвинутой копии контура.
+      ctx.beginPath();z.poly.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));ctx.closePath();
+      ctx.setLineDash([2,3]);ctx.lineWidth=1;ctx.strokeStyle=z.chk&&z.chk.ok?kc:'#ff4d5e';
       ctx.save();ctx.translate(3,-3);ctx.stroke();ctx.restore();ctx.setLineDash([]);}
-    if(i===hoverZ&&!isSel){ctx.fillStyle='rgba(255,255,255,.08)';ctx.fill();}
+    if(i===hoverZ&&!isSel){
+      // Та же утечка path: если зона принята, но НЕ avg, текущий путь всё ещё — линии
+      // штриховки из блока выше (avg-блок его не перестраивает, т.к. не выполняется).
+      ctx.beginPath();z.poly.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));ctx.closePath();
+      ctx.fillStyle='rgba(255,255,255,.08)';ctx.fill();}
     const b=bbox(z.poly);
     if((b.x2-b.x1)*scale>46&&(b.y2-b.y1)*scale>16){ctx.font='10px ui-monospace,Consolas,monospace';
       ctx.textAlign='left';ctx.textBaseline='top';
@@ -739,30 +852,79 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
     ctx.setLineDash([]);ctx.fillStyle='#3ecf8e';ctx.font='11px ui-monospace,Consolas,monospace';ctx.textAlign='left';
     ctx.fillText(Math.round(Math.abs(r.x2-r.x1)*1000)+' × '+Math.round(Math.abs(r.y2-r.y1)*1000)+' мм',
       SX(Math.min(r.x1,r.x2))+4,SY(Math.max(r.y1,r.y2))-6);}
+  if(copyMode&&copySrc&&copyPt){
+    const b=bbox(copySrc.poly),cx=(b.x1+b.x2)/2,cy=(b.y1+b.y2)/2,dx=copyPt[0]-cx,dy=copyPt[1]-cy;
+    const poly=copySrc.poly.map(p=>[p[0]+dx,p[1]+dy]);
+    ctx.save();ctx.setLineDash([5,4]);ctx.lineWidth=1.8;ctx.strokeStyle=KC[copySrc.k]||'#3ecf8e';ctx.globalAlpha=.9;
+    ctx.beginPath();poly.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));ctx.closePath();
+    ctx.stroke();ctx.globalAlpha=.18;ctx.fillStyle=KC[copySrc.k]||'#3ecf8e';ctx.fill();ctx.restore();ctx.setLineDash([]);}
 }
 // ── UI ──
 function renderLegend(){
   const act=zones.filter(z=>z.state!=='rejected');
-  const rows=[1,2,3,4,5,6,8].map(k=>{const n=act.filter(z=>z.k===k).length;
+  const rows=KORD.map(k=>{const n=act.filter(z=>z.k===k).length;
     return '<div class="row"'+(n?'':' style="opacity:.35"')+'><span class="chip" style="background:'+KC[k]+'"></span>'+
       KL[k]+' · '+n+'</div>';}).join('');
   document.getElementById('legend').innerHTML=
-  '<div class="row"><span class="chip" style="background:#3a4250"></span><span id="lgBg">фон s'+BGs+'d'+BGd+' ('+capBG()+')</span></div>'+
+  '<div class="row"><span class="chip" style="background:#3a4250"></span><span id="lgBg">фон s'+curBGs()+'d'+curBGd()+' ('+capBG()+')</span></div>'+
   rows+
   '<div class="row" style="margin-top:4px;color:#8b96a5">всего зон: '+act.length+' · КЭ с допкой: '+cells.filter(needAdd).length+'</div>'+
   '<div class="row"><span class="chip" style="background:none;border:1.5px solid #ff4d5e"></span>КЭ без покрытия</div>'+
   '<div class="row" style="margin-top:5px;border-top:1px solid #2c343f;padding-top:5px"><span class="chip" style="background:none;border:1.5px dashed #8b96a5"></span>предложена</div>'+
-  '<div class="row"><span class="chip" style="background:repeating-linear-gradient(45deg,#8b96a5 0 1px,transparent 1px 4px);border:1.5px solid #8b96a5"></span>принята (штриховка)</div>';}
-(function(){const dS=document.getElementById('bgD'),sS=document.getElementById('bgS');
-  dS.innerHTML=[10,12,14,16,18,20].map(d=>'<option'+(d===BGd?' selected':'')+'>'+d+'</option>').join('');
-  sS.innerHTML=[100,200].map(v=>'<option'+(v===BGs?' selected':'')+'>'+v+'</option>').join('');
+  '<div class="row"><span class="chip" style="background:#8b96a5;border:1.5px solid #8b96a5"></span>принята</div>';}
+// Пересчитывает cells/zones для ЗАГРУЖЕННЫХ вкладок нужной грани (faceFilter='top'/'bottom',
+// null — все) под новую фоновую арматуру — смена фона должна применяться ко всем вкладкам
+// затронутой грани, а не только к активной (иначе для неактивных вкладок фон "применится"
+// только когда на них переключатся, молча, без явного пересчёта).
+function regenerateBackground(faceFilter){
+  Object.keys(DATASETS).forEach(key=>{
+    const ds=DATASETS[key];
+    if(faceFilter&&ds.face!==faceFilter)return;
+    cells=ds.cells;zones=ds.zones;ADJ=null;
+    reclassCells();regenerate(true);absorbNested(true);
+    ds.zones=zones;
+  });
+  if(ACTIVE_KEY){const ds=DATASETS[ACTIVE_KEY];cells=ds.cells;zones=ds.zones;ADJ=null;}
+}
+(function(){
+  const opt=(list,cur)=>list.map(v=>'<option'+(v===cur?' selected':'')+'>'+v+'</option>').join('');
+  const dS=document.getElementById('bgD'),sS=document.getElementById('bgS');
+  dS.innerHTML=opt(BG_DIAMS,BGd);sS.innerHTML=opt(STEPS,BGs);
   const upd=()=>{document.getElementById('bgCap').textContent='фон s'+BGs+'d'+BGd+' несёт '+capBG()+' см²/м';};
   const apply=()=>{push('смена фона');BGd=+dS.value;BGs=+sS.value;upd();
-    reclassCells();regenerate(true);absorbNested(true);recompute();sync();
+    regenerateBackground(null);recompute();sync();
     const need=cells.filter(needAdd).length;
     toast('Фон s'+BGs+'d'+BGd+' ('+capBG()+' см²/м): зоны построены заново — '+
       zones.filter(z=>z.state!=='rejected').length+' зон, ячеек с допкой '+need);};
-  dS.onchange=apply;sS.onchange=apply;upd();})();
+  dS.onchange=apply;sS.onchange=apply;
+
+  const dBot=document.getElementById('bgDBottom'),sBot=document.getElementById('bgSBottom');
+  const dTop=document.getElementById('bgDTop'),sTop=document.getElementById('bgSTop');
+  dBot.innerHTML=opt(BG_DIAMS,BGdBottom);sBot.innerHTML=opt(STEPS,BGsBottom);
+  dTop.innerHTML=opt(BG_DIAMS,BGdTop);sTop.innerHTML=opt(STEPS,BGsTop);
+  const updBot=()=>{document.getElementById('bgCapBottom').textContent=
+    'низ s'+BGsBottom+'d'+BGdBottom+' несёт '+(+(ABAR[BGdBottom]*1000/BGsBottom).toFixed(2))+' см²/м';};
+  const updTop=()=>{document.getElementById('bgCapTop').textContent=
+    'верх s'+BGsTop+'d'+BGdTop+' несёт '+(+(ABAR[BGdTop]*1000/BGsTop).toFixed(2))+' см²/м';};
+  const applyBot=()=>{push('смена фона (низ)');BGdBottom=+dBot.value;BGsBottom=+sBot.value;updBot();
+    regenerateBackground('bottom');recompute();sync();
+    toast('Фон низ s'+BGsBottom+'d'+BGdBottom+': зоны пересчитаны');};
+  const applyTop=()=>{push('смена фона (верх)');BGdTop=+dTop.value;BGsTop=+sTop.value;updTop();
+    regenerateBackground('top');recompute();sync();
+    toast('Фон верх s'+BGsTop+'d'+BGdTop+': зоны пересчитаны');};
+  dBot.onchange=applyBot;sBot.onchange=applyBot;dTop.onchange=applyTop;sTop.onchange=applyTop;
+
+  // Переключение показа одиночного/раздельного фона под IS_FOUNDATION (уже известен к моменту
+  // вызова boot()/switchTab() в loadState — см. ниже) + подставляет актуальные значения в селекты
+  // (дефолт ⌀20 для фундамента выставляется в loadState ДО этого вызова).
+  window.applyFoundationUI=function(){
+    document.getElementById('bgSingle').style.display=IS_FOUNDATION?'none':'';
+    document.getElementById('bgFound').style.display=IS_FOUNDATION?'':'none';
+    dBot.value=BGdBottom;sBot.value=BGsBottom;dTop.value=BGdTop;sTop.value=BGsTop;
+    updBot();updTop();
+  };
+  upd();updBot();updTop();
+})();
 (function(){const t=document.getElementById('latab');
   t.innerHTML=Object.entries(LA).map(([d,v])=>'<tr><td>⌀'+d+'</td><td><input data-d="'+d+'" value="'+v+'"></td></tr>').join('');
   t.querySelectorAll('input').forEach(i=>i.onchange=()=>{LA[i.dataset.d]=+i.value||400;draw();});})();
@@ -770,8 +932,9 @@ let filt=0;
 function renderFilter(){const el=document.getElementById('zfilter');
   el.innerHTML=[0,1,2,3,4,5,8].map(k=>'<button class="fbtn'+(filt===k?' on':'')+'" data-k="'+k+'">'+(k?KL[k]:'все')+'</button>').join('');
   el.querySelectorAll('.fbtn').forEach(b=>b.onclick=()=>{filt=+b.dataset.k;renderFilter();renderList();});}
-const badge=z=>z.state==='accepted'?'<span class="zst st-a">принята</span>':
-  z.state==='rejected'?'<span class="zst st-r">'+(z.dropped?'снята фоном':'откл.')+'</span>':
+const badge=z=>z.state==='rejected'?'<span class="zst st-r">'+(z.dropped?'снята фоном':'откл.')+'</span>':
+  z.placed?'<span class="zst st-a">размещена</span>':
+  z.state==='accepted'?'<span class="zst st-a">принята</span>':
   z.edited?'<span class="zst st-e">изменена</span>':z.flags.length?'<span class="zst st-f">решить</span>':'<span class="zst st-p">предложена</span>';
 function renderList(){const el=document.getElementById('zlist');
   document.getElementById('zcount').textContent=zones.filter(z=>z.state!=='rejected').length+' активных';
@@ -801,12 +964,16 @@ function zoomTo(z){const b=bbox(z.poly),cx=(b.x1+b.x2)/2,cy=(b.y1+b.y2)/2;
   scale=Math.min(cv.clientWidth/(b.x2-b.x1+4),cv.clientHeight/(b.y2-b.y1+4));
   ox=cv.clientWidth/2-cx*scale;oy=cv.clientHeight/2+cy*scale;tScale=scale;anchor=null;}
 function renderCard(){const el=document.getElementById('zcard');
-  if(!sel.size){el.innerHTML='<div class="hint">Клик — выбрать зону. Двойной клик — редактировать форму: тянуть рёбра (50 мм вдоль, 100 мм поперёк), добавлять изломы. Ctrl+клик — несколько зон. Ctrl+Z — отменить, Ctrl+Y — повторить, Del — отклонить выбранную зону(ы).</div>';return;}
+  if(!sel.size){el.innerHTML='<div class="hint">Клик — выбрать зону. Двойной клик — редактировать форму: тянуть рёбра (50 мм вдоль, 100 мм поперёк). Ctrl+клик — несколько зон. Ctrl+Z — отменить, Ctrl+Y — повторить, Del — удалить выбранную зону(ы).</div>';return;}
   if(sel.size>1){
     el.innerHTML='<div class="t"><b>'+sel.size+' зон выбрано</b></div>'
-      +'<div class="hint">«Слить выбранные» — общий габарит, класс по старшему. Del — отклонить все выбранные.</div>'
-      +'<div id="zbtns"><button class="rej" id="bRejMulti">✕ Отклонить все ('+sel.size+')</button></div>';
+      +'<div class="hint">«Слить выбранные» — общий габарит, класс по старшему. Del — удалить все выбранные.</div>'
+      +'<div id="zbtns"><button class="acc" id="bAccMulti">✓ Принять все ('+sel.size+')</button>'
+      +'<button class="rej" id="bRejMulti">✕ Отклонить все ('+sel.size+')</button>'
+      +'<button class="del" id="bDelMulti">🗑 Удалить все ('+sel.size+')</button></div>';
+    document.getElementById('bAccMulti').onclick=acceptSelected;
     document.getElementById('bRejMulti').onclick=rejectSelected;
+    document.getElementById('bDelMulti').onclick=deleteSelected;
     return;}
   const i=[...sel][0],z=zones[i],b=bbox(z.poly);
   el.innerHTML='<div class="t"><b>'+z.id+'</b><span style="color:'+KC[z.k]+';font-family:var(--mono);font-size:12px">'+KL[z.k]+'</span>'+badge(z)+'</div>'+
@@ -838,16 +1005,20 @@ function renderCard(){const el=document.getElementById('zcard');
     '<span class="cap">несёт '+capOf(z.k,z.step)+' см²/м</span></div>'+
   '<label class="avgline"><input type="checkbox" id="cAvg"'+(z.avg?' checked':'')+'> Считать по среднему по зоне</label>'+
   (z.avg?avgPanel(z):'')+
-  '<div id="zbtns"><button class="edt" id="bEdit">✎ Форма</button><button class="acc" id="bAcc">✓ Принять</button><button class="rej" id="bRej">✕ Отклонить</button></div>';
-  el.querySelectorAll('.kb').forEach(b=>b.onclick=()=>{push('диаметр '+z.id);z.k=+b.dataset.k;z.edited=true;
+  '<div id="zbtns"><button class="edt" id="bEdit">✎ Форма</button><button class="edt" id="bCopy">'+
+  (copyMode&&copySrc===z?'⧉ Клик по плите… (Esc)':'⧉ Копия')+'</button><button class="acc" id="bAcc">✓ Принять</button>'+
+  '<button class="rej" id="bRej">✕ Отклонить</button><button class="del" id="bDel">🗑 Удалить</button></div>';
+  el.querySelectorAll('.kb').forEach(b=>b.onclick=()=>{push('диаметр '+z.id);z.k=+b.dataset.k;z.edited=true;z.placed=false;
     if(z.state==='accepted')z.state='pending';recompute();sync();});
-  el.querySelectorAll('.sb').forEach(b=>b.onclick=()=>{push('шаг '+z.id);z.step=+b.dataset.s;z.edited=true;
+  el.querySelectorAll('.sb').forEach(b=>b.onclick=()=>{push('шаг '+z.id);z.step=+b.dataset.s;z.edited=true;z.placed=false;
     if(z.state==='accepted')z.state='pending';recompute();sync();});
-  document.getElementById('cAvg').onchange=e=>{push('усреднение '+z.id);z.avg=e.target.checked;z.edited=true;
+  document.getElementById('cAvg').onchange=e=>{push('усреднение '+z.id);z.avg=e.target.checked;z.edited=true;z.placed=false;
     if(z.state==='accepted')z.state='pending';recompute();sync();};
   document.getElementById('bEdit').onclick=()=>{editZ=(editZ===i?-1:i);sync();};
+  document.getElementById('bCopy').onclick=()=>{(copyMode&&copySrc===z)?cancelCopy():startCopy(z);};
   document.getElementById('bAcc').onclick=()=>{push('принята '+z.id);z.state='accepted';editZ=-1;recompute();sync();};
-  document.getElementById('bRej').onclick=()=>{push('отклонена '+z.id);z.state='rejected';sel.clear();editZ=-1;recompute();sync();toast('Зона отклонена — покрытие пересчитано');};}
+  document.getElementById('bRej').onclick=()=>{push('отклонена '+z.id);z.state='pending';recompute();sync();toast('Зона отклонена — покрытие пересчитано');};
+  document.getElementById('bDel').onclick=()=>deleteZone(i);}
 function avgPanel(z){const c=avgCheck(z);
   const line=(okv,txt)=>'<div class="ar '+(okv?'ok':'bad')+'">'+(okv?'✓':'✕')+' '+txt+'</div>';
   return '<div class="avgbox">'+
@@ -861,11 +1032,19 @@ function avgPanel(z){const c=avgCheck(z);
 function sync(){document.getElementById('tMergeB').disabled=sel.size<2;
   const bar=document.getElementById('editbar');bar.classList.toggle('on',editZ>=0);
   if(editZ>=0)document.getElementById('ebname').textContent='форма '+zones[editZ].id;
-  renderList();renderCard();buildWarnings();renderLegend();draw();}
-document.getElementById('ebStep').onclick=function(){pendStep=true;this.classList.add('gray');toast('Кликните по ребру зоны — там появится излом');};
-document.getElementById('ebDel').onclick=()=>{if(editZ<0)return;push('убраны изломы '+zones[editZ].id);unstep(zones[editZ]);recompute();sync();toast('Изломы убраны');};
+  renderTabs();renderList();renderCard();buildWarnings();renderLegend();renderContourWarn();draw();}
+// Видимое ПРЯМО в холсте предупреждение о расхождении контура (см. CONTOUR_MISMATCH) — раньше
+// было видно только маленьким значком на вкладке и один раз при загрузке (нативный TaskDialog
+// от C#, легко пропустить/закрыть) — теперь баннер держится, пока не заменят файл этой вкладки.
+function renderContourWarn(){
+  const el=document.getElementById('contourWarn');
+  const mism=CONTOUR_MISMATCH[ACTIVE_KEY];
+  if(mism===undefined){el.style.display='none';return;}
+  el.style.display='block';
+  el.textContent='⚠ Контур плиты (Revit) и мозаика DXF на этой вкладке отличаются на '+mism+'% — проверьте, тот ли файл выбран';
+}
 document.getElementById('ebRect').onclick=()=>{if(editZ<0)return;push('возврат к прямоугольнику '+zones[editZ].id);unstep(zones[editZ]);recompute();sync();};
-document.getElementById('ebDone').onclick=()=>{editZ=-1;pendStep=null;sync();};
+document.getElementById('ebDone').onclick=()=>{editZ=-1;sync();};
 function doMerge(mode){push('слияние '+sel.size+' зон');const ids=[...sel],zs=ids.map(i=>zones[i]);
   const bs=zs.map(z=>bbox(z.poly)),k=Math.max(...zs.map(z=>z.k));
   const x1=Math.min(...bs.map(b=>b.x1)),x2=Math.max(...bs.map(b=>b.x2)),y1=Math.min(...bs.map(b=>b.y1)),y2=Math.max(...bs.map(b=>b.y2));
@@ -894,14 +1073,28 @@ document.getElementById('tIso').onclick=function(){showIso=!showIso;this.classLi
 document.getElementById('tValues').onclick=function(){valMode=valMode==='auto'?'on':valMode==='on'?'off':'auto';
   this.textContent='№ Значения Aₛ — '+{auto:'авто',on:'вкл',off:'выкл'}[valMode];draw();};
 function setNewBtn(){const b=document.getElementById('tNew');
-  b.classList.toggle('on',newMode);b.textContent=newMode?'✚ Растяните рамку на карте…':'✚ Новая зона (рамкой)';
-  cv.style.cursor=newMode?'crosshair':'grab';}
+  b.classList.toggle('on',newMode||pickingDiam);
+  b.textContent=newMode?'✚ Растяните рамку на карте…':(pickingDiam?'✚ Выберите диаметр ниже…':'✚ Новая зона (рамкой)');
+  cv.style.cursor=newMode?'crosshair':'grab';
+  document.getElementById('newDiamPick').style.display=pickingDiam?'block':'none';}
+(function(){
+  const el=document.getElementById('newDiamBtns');
+  el.innerHTML=KORD.map(k=>'<button class="kb" data-k="'+k+'" style="--kc:'+KC[k]+'">'+(k===8?'СПЕЦ':'d'+DIAM[k])+'</button>').join('');
+  el.querySelectorAll('.kb').forEach(b=>b.onclick=()=>{
+    newDiam=+b.dataset.k;pickingDiam=false;newMode=true;setNewBtn();
+  });
+})();
 document.getElementById('tNest').onclick=function(){autoNest=!autoNest;this.classList.toggle('on',autoNest);
   this.textContent='⊂ Объединять пересекающиеся — '+(autoNest?'вкл':'выкл');
   if(autoNest){push('объединение пересекающихся');absorbNested();recompute();sync();}};
 document.getElementById('tUndo').onclick=undo;
 document.getElementById('tRedo').onclick=redo;
-document.getElementById('tNew').onclick=()=>{newMode=!newMode;if(newMode){sel.clear();editZ=-1;sync();}setNewBtn();};
+document.getElementById('tNew').onclick=()=>{
+  if(copyMode)cancelCopy();
+  if(newMode||pickingDiam){newMode=false;pickingDiam=false;newDiam=null;}
+  else{pickingDiam=true;sel.clear();editZ=-1;sync();}
+  setNewBtn();
+};
 let resetArm=null;
 document.getElementById('tReset').onclick=function(){
   if(!resetArm){this.classList.add('on');this.textContent='⟲ Точно сбросить? — нажмите ещё раз';
@@ -915,13 +1108,64 @@ document.getElementById('tReset').onclick=function(){
   toast('Все зоны возвращены к предложению расчёта · Ctrl+Z вернёт правки');};
 document.getElementById('tSettings').onclick=()=>document.getElementById('settings').classList.toggle('open');
 document.getElementById('place').onclick=()=>{
-  const accepted=zones.filter(z=>z.state==='accepted').map(z=>({
-    id:z.id,k:z.k,d:DIAM[z.k],step:z.step,avg:z.avg,am:z.am,how:z.how||'расчёт',poly:z.poly}));
-  if(window.chrome&&window.chrome.webview){
-    window.chrome.webview.postMessage('place:'+JSON.stringify(accepted));
-  }else{
-    toast('Демо (нет связи с Revit): '+accepted.length+' зон готово к размещению');
+  // Уже размещённые (z.placed — из истории прошлых сеансов ИЛИ размещённые только что в этом
+  // окне, см. markPlaced/applyPlacedHistory) в повторную отправку не идут — их и так пропустит
+  // C# (_placedZoneIds), но нет смысла гонять их туда-обратно и путать пользователя отчётом.
+  const toSend=zones.filter(z=>z.state==='accepted'&&!z.placed);
+  if(!toSend.length){
+    toast(zones.some(z=>z.state==='accepted')?'Все принятые зоны этой вкладки уже размещены ранее':'Нет подтверждённых зон — нечего размещать');
+    return;
   }
+  // bgD — диаметр фоновой (основной) арматуры (см. настройки редактора): нужен C#, чтобы
+  // считать отступ доп. арматуры от защитного слоя относительно фоновой сетки (см.
+  // RebarPlacer.BarElevation), а не жёстко зашитое значение.
+  // face/dir — берём из ТЕКУЩЕЙ активной вкладки (при нескольких загруженных DXF грань/
+  // направление у C# больше не единственные на всё окно, шлём явно с каждым размещением).
+  const accepted=toSend.map(z=>({
+    id:z.id,k:z.k,d:DIAM[z.k],step:z.step,avg:z.avg,am:z.am,how:z.how||'расчёт',poly:z.poly,bgD:curBGd()}));
+  const msg={face:CTX.face,dir:CTX.dir,zones:accepted};
+  if(window.chrome&&window.chrome.webview){
+    window.chrome.webview.postMessage('place:'+JSON.stringify(msg));
+  }else{
+    toast('Демо (нет связи с Revit): '+accepted.length+' зон готово к размещению ('+tabLabel(CTX.face,CTX.dir)+')');
+  }
+};
+// DXF больше не выбирается при открытии плиты — подгружается/заменяется по требованию отсюда
+// (см. RebarZonesWindow.OnWebMessage "loaddxf:"). Шлём список уже загруженных В ЭТОМ СЕАНСЕ
+// вкладок (а не то, что в кэше на диске) — C# использует его только для текста уведомления
+// "заменил ранее загруженный файл", сам выбор/замена работает независимо от этого списка.
+document.getElementById('loadDxf').onclick=()=>{
+  const occupied=Object.keys(DATASETS);
+  if(window.chrome&&window.chrome.webview){
+    window.chrome.webview.postMessage('loaddxf:'+JSON.stringify(occupied));
+  }else{
+    toast('Демо (нет связи с Revit): выбор DXF недоступен вне Revit');
+  }
+};
+// Вызывается из C# (RebarZonesWindow.SendAddDataset) после выбора DXF через кнопку "📁 DXF" —
+// добавляет/заменяет ТОЛЬКО перечисленные вкладки, не трогая уже открытые/отредактированные
+// (в отличие от loadState, который перезаписывает вообще всё). Новые вкладки всегда получают
+// свежий авторасчёт зон — под только что выбранный файл восстанавливать старый снимок незачем.
+window.addDataset=function(json){
+  const payload=typeof json==='string'?JSON.parse(json):json;
+  const list=payload.datasets||[];
+  if(!list.length){toast('Новых DXF не выбрано');return;}
+  list.forEach(d=>{
+    const face=d.face==='bottom'?'bottom':'top',dir=d.dir==='y'?'y':'x';
+    const key=dsKey(face,dir);
+    // Сброс СТАРОГО предупреждения по этой вкладке ДО слияния свежего contourMismatch —
+    // Object.assign снизу только добавляет/перезаписывает ключи, а если заменённый файл
+    // больше НЕ конфликтует с контуром, для него в payload.contourMismatch ключа вообще нет,
+    // и старое значение иначе "залипает" навсегда.
+    delete CONTOUR_MISMATCH[key];
+    cells=d.cells||[];zones=[];ADJ=null;
+    reclassCells();regenerate(false);absorbNested(true);
+    DATASETS[key]={face,dir,cells,zones,hist:[],redo:[]};
+  });
+  Object.assign(CONTOUR_MISMATCH,payload.contourMismatch||{});
+  const firstD=list[0],firstKey=dsKey(firstD.face==='bottom'?'bottom':'top',firstD.dir==='y'?'y':'x');
+  ACTIVE_KEY=null;switchTab(firstKey);
+  toast('Загружено вкладок: '+list.length);
 };
 function buildWarnings(){const rows=[];zones.forEach((z,i)=>{if(z.state==='rejected')return;
     const y=yCheck(z);
@@ -946,19 +1190,47 @@ document.getElementById('cover').onclick=()=>{if(uncovered.size)showUncovered();
 window.addEventListener('resize',resize);
 
 // ── интеграция с Revit (WebView2): приём ячеек из DXF, отправка подтверждённых зон ──
+// Несколько DXF на одну плиту (до 4: Верх/Низ × X/Y) — каждый живёт в своей вкладке со своими
+// cells/zones/историей отмен; переключение вкладок меняет то, на что указывают глобальные
+// cells/zones/HIST/REDO (сами массивы не копируются — держим ссылку на массив зон/ячеек
+// конкретной вкладки, поэтому все существующие push/splice/forEach-мутации остаются валидны).
 let INIT=[];
 let CTX={face:'top',dir:'x'};
-function applyContext(p){
-  document.getElementById('plate').textContent=p.plate||'Плита';
-  CTX.face=p.face==='bottom'?'bottom':'top';
-  CTX.dir=p.dir==='y'?'y':'x';
-  const faceRu=CTX.face==='bottom'?'Низ':'Верх', dirRu=CTX.dir.toUpperCase();
-  const tabs=document.querySelectorAll('#tabs .tab');
-  tabs.forEach((t,i)=>{
-    if(i===0){t.className='tab on';t.innerHTML='<span class="dot"></span>'+faceRu+' · '+dirRu;}
-    else{t.className='tab off';}
+let DATASETS={};      // key "top-x"/"top-y"/"bottom-x"/"bottom-y" -> {face,dir,cells,zones,hist,redo}
+// Вкладки, где контур плиты (Revit) и габарит мозаики КЭ (DXF) разошлись >20% (см.
+// RebarZonesCommand.ContourMismatch) — key -> % расхождения, для красного "!" на вкладке.
+let CONTOUR_MISMATCH={};
+let ACTIVE_KEY=null;
+const TAB_ORDER=[['top','x'],['top','y'],['bottom','x'],['bottom','y']];
+const dsKey=(face,dir)=>face+'-'+dir;
+const tabLabel=(face,dir)=>(face==='bottom'?'Низ':'Верх')+' · '+dir.toUpperCase();
+function renderTabs(){
+  const tabsEl=document.getElementById('tabs');if(!tabsEl)return;
+  tabsEl.innerHTML=TAB_ORDER.map(([face,dir])=>{
+    const key=dsKey(face,dir),loaded=!!DATASETS[key],on=key===ACTIVE_KEY;
+    const mism=CONTOUR_MISMATCH[key];
+    const warn=mism!==undefined?'<span style="color:#ff4d5e;margin-left:5px" title="Контур плиты и DXF отличаются на '+mism+'% — проверьте, тот ли файл выбран">⚠</span>':'';
+    return '<div class="tab'+(on?' on':(loaded?'':' off'))+'" data-key="'+key+'">'+
+      '<span class="dot"></span>'+tabLabel(face,dir)+warn+'</div>';
+  }).join('');
+  tabsEl.querySelectorAll('.tab').forEach(t=>{
+    if(DATASETS[t.dataset.key]&&t.dataset.key!==ACTIVE_KEY)t.onclick=()=>switchTab(t.dataset.key);
   });
-  document.getElementById('dirbadge').textContent='стержни ‖ '+dirRu+' · анкеровка ‖ '+dirRu;
+}
+function switchTab(key){
+  if(!DATASETS[key]||key===ACTIVE_KEY)return;
+  if(ACTIVE_KEY){const cur=DATASETS[ACTIVE_KEY];cur.hist=HIST.slice();cur.redo=REDO.slice();}
+  const ds=DATASETS[key];
+  cells=ds.cells;zones=ds.zones;ADJ=null;
+  HIST.length=0;ds.hist.forEach(h=>HIST.push(h));
+  REDO.length=0;ds.redo.forEach(h=>REDO.push(h));
+  CTX.face=ds.face;CTX.dir=ds.dir;
+  ACTIVE_KEY=key;
+  sel.clear();editZ=-1;drag=null;newRect=null;newMode=false;pickingDiam=false;newDiam=null;copyMode=false;copySrc=null;copyPt=null;setNewBtn();
+  fitted=false;
+  computeBounds();
+  document.getElementById('dirbadge').textContent='стержни ‖ '+CTX.dir.toUpperCase()+' · анкеровка ‖ '+CTX.dir.toUpperCase();
+  renderFilter();recompute();sync();updHist();resize();
 }
 function boot(){
   reclassCells();regenerate(false);absorbNested(true);
@@ -967,21 +1239,97 @@ function boot(){
   renderFilter();recompute();sync();updHist();resize();
 }
 
-// вызывается из C# после навигации: loadState(json), json={cells,floorOutline,grids,face,dir,plate}
+// Сверка с историей размещения из ПРОШЛЫХ сеансов (см. PlacedZoneCache/payload.placed) — по
+// габариту рабочей зоны + диаметру + шагу, а не по id (эфемерный, генерируется заново при
+// каждом regenerate()). Допуск 50мм — на округления, а не на "похожие, но другие" зоны: зона,
+// которую вручную правили (рёбра/изломы) ПОСЛЕ размещения в прошлый раз, скорее всего уже не
+// совпадёт день-в-день с заново сгенерированной — тогда она просто не отметится как размещённая.
+const PLACED_TOL_M=0.05;
+function applyPlacedHistory(zonesArr,records){
+  if(!records||!records.length)return;
+  zonesArr.forEach(z=>{
+    const b=bbox(z.poly),d=DIAM[z.k];
+    const hit=records.find(r=>r.d===d&&r.step===z.step&&
+      Math.abs(b.x1-r.x1)<=PLACED_TOL_M&&Math.abs(b.x2-r.x2)<=PLACED_TOL_M&&
+      Math.abs(b.y1-r.y1)<=PLACED_TOL_M&&Math.abs(b.y2-r.y2)<=PLACED_TOL_M);
+    if(hit)z.placed=true;
+  });
+}
+// вызывается из C# (RebarZonesWindow.MarkPlacedAsync) после реального размещения арматуры в
+// Revit — сверяет по габариту+диаметру+шагу (та же логика, что applyPlacedHistory при
+// открытии), НЕ по id: id зоны генерируется заново при каждом regenerate() и может
+// переиспользоваться для другой зоны (напр. исходную удалили и создали новую в другом месте
+// с тем же диаметром) — сверка по id в этом случае ошибочно посчитала бы новую зону уже
+// размещённой. Применяем только к вкладке comboKey — именно её отправляли на размещение.
+window.markPlaced=function(comboKey,records){
+  const ds=DATASETS[comboKey];
+  if(ds) applyPlacedHistory(ds.zones,records);
+  renderList();renderCard();draw();
+};
+// Вызывается из C# (RebarZonesWindow.CollectStateAsync) — при закрытии окна и сразу после
+// размещения арматуры: полный снимок ВСЕХ зон по всем загруженным вкладкам (ручная правка формы,
+// диаметр/шаг, принята/отклонена, признак "размещена"), чтобы при следующем открытии этой же
+// плиты восстановить именно то, что было, а не только результат авторасчёта — см. loadState.
+window.getStateJSON=function(){
+  const out={};
+  Object.keys(DATASETS).forEach(key=>{out[key]=DATASETS[key].zones;});
+  return JSON.stringify(out);
+};
+// вызывается из C# после навигации: loadState(json), json={datasets:[{face,dir,cells}],floorOutline,grids,plate,...}
 window.loadState=function(json){
   const payload=typeof json==='string'?JSON.parse(json):json;
-  DATA={cells:payload.cells||[]};
-  cells=DATA.cells;
   FLOOR_OUTLINE=payload.floorOutline||[];
+  OPENINGS=payload.openings||[];
   GRIDS=payload.grids||[];
   ISO_X=(payload.isolines&&payload.isolines.xs)||[];
   ISO_Y=(payload.isolines&&payload.isolines.ys)||[];
-  ADJ=null;
-  computeBounds();
-  applyContext(payload);
-  boot();
-  console.log('[isolines] X='+ISO_X.length+' Y='+ISO_Y.length+' dir='+CTX.dir);
-  setTimeout(()=>toast('Изолиний: X='+ISO_X.length+', Y='+ISO_Y.length+' (dir='+CTX.dir+')'),400);
+  document.getElementById('plate').textContent=payload.plate||'Плита';
+
+  // Обратная совместимость: старый формат — один датасет прямо в корне payload.
+  const list=(payload.datasets&&payload.datasets.length)?payload.datasets
+    :[{face:payload.face||'top',dir:payload.dir||'x',cells:payload.cells||[]}];
+
+  // Фундамент — своя фоновая арматура (верх/низ раздельно), дефолт ⌀20 вместо ⌀10. Выставляем
+  // ДО генерации зон ниже — needClass()/capBG() уже должны видеть правильный фон.
+  IS_FOUNDATION=!!payload.isFoundation;
+  if(IS_FOUNDATION){BGdTop=20;BGdBottom=20;}
+  if(window.applyFoundationUI)applyFoundationUI();
+  CONTOUR_MISMATCH=payload.contourMismatch||{};
+
+  const placedHistory=payload.placed||{};
+  const savedZones=payload.savedZones||{};
+  DATASETS={};
+  list.forEach(d=>{
+    const face=d.face==='bottom'?'bottom':'top',dir=d.dir==='y'?'y':'x';
+    const key=dsKey(face,dir);
+    cells=d.cells||[];ADJ=null;
+    const saved=savedZones[key];
+    if(saved&&saved.length){
+      // Полный снимок из прошлого сеанса (см. getStateJSON/RebarZonesDataStore) — восстанавливаем
+      // ВСЕ изменения (ручную правку формы, принятые/отклонённые, признак "размещена"), а не
+      // только заново сгенерированные по расчёту. recalcZones() сверяет диаметры/актуальность
+      // под ТЕКУЩИЕ cells — на случай, если DXF для этой вкладки успели заменить.
+      zones=saved;
+      reclassCells();recalcZones();
+    }else{
+      // Снимка ещё нет (первый раз для этой вкладки, либо старые данные без полного снимка) —
+      // считаем с нуля и сверяем с историей размещения по габариту (см. applyPlacedHistory).
+      zones=[];
+      reclassCells();regenerate(false);absorbNested(true);
+      applyPlacedHistory(zones,placedHistory[key]);
+    }
+    DATASETS[key]={face,dir,cells,zones,hist:[],redo:[]};
+  });
+
+  ACTIVE_KEY=null;
+  const firstKey=Object.keys(DATASETS)[0];
+  if(firstKey)switchTab(firstKey);
+  else{renderFilter();recompute();sync();updHist();resize();}   // 0 вкладок — просто пустое состояние, ждём "📁 DXF"
+
+  console.log('[isolines] X='+ISO_X.length+' Y='+ISO_Y.length+' вкладок='+Object.keys(DATASETS).length);
+  setTimeout(()=>toast(Object.keys(DATASETS).length
+    ?('Загружено вкладок: '+Object.keys(DATASETS).length+' · изолиний X='+ISO_X.length+', Y='+ISO_Y.length)
+    :'Нет сохранённых DXF для этой плиты — нажмите «📁 DXF»'),400);
 };
 computeBounds();
 boot();

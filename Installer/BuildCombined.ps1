@@ -46,7 +46,7 @@ Write-Host "`nКомпиляция комбинированного устано
 if ($LASTEXITCODE -ne 0) { Write-Error "ISCC.exe завершился с ошибкой." }
 
 $output = "$PSScriptRoot\Output"
-$exe    = Get-ChildItem $output -Filter "DAN_Plugin_Setup_2.0.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$exe    = Get-ChildItem $output -Filter "DAN_Plugin_Setup_*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 Write-Host "`nУстановщик готов:" -ForegroundColor Green
 Write-Host "  $($exe.FullName)" -ForegroundColor White
 

@@ -107,10 +107,12 @@
     <Compile Include="Чеклист\WebAssets.cs" />
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
-    <Compile Include="RebarPlacer.cs" />
-    <Compile Include="DxfArmoringImport.cs" />
+    <Compile Include="RebarZones\RebarPlacer.cs" />
+    <Compile Include="RebarZones\DxfArmoringImport.cs" />
     <Compile Include="RebarZones\RebarZonesWindow.cs" />
     <Compile Include="RebarZones\RebarZonesCommand.cs" />
+    <Compile Include="RebarZones\RebarZonesDataStore.cs" />
+    <Compile Include="RebarZones\RebarZonesDxfPicker.cs" />
     <Compile Include="KzhNotes\NotesCommand.cs" />
     <Compile Include="KzhNotes\NotesEngine.cs" />
     <Compile Include="KzhNotes\NotesLibrary.cs" />

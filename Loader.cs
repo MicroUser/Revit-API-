@@ -39,10 +39,19 @@ namespace MyPlugin.Loader
 
             panel.AddSeparator();
 
-            var btnAnnot = (PushButton)panel.AddItem(new PushButtonData(
-                "CreateRebarAnnotation", "Аннотация\nдоп.арм", path,
-                "MyPlugin.Loader.ProxyCreateRebarAnnotation")
-            { LongDescription = "Создаёт аннотацию для дополнительной арматуры плит по центру." });
+            // Допармирование плит (импорт DXF мозаики ЛИРА → зоны → арматура) + Аннотация доп.арм
+            // — стакованная пара (одна колонка): сначала размещают допку, потом её аннотируют.
+            var stackSlabRebar = panel.AddStackedItems(
+                new PushButtonData("RebarZonesCommand", "Допармирование\nплит", path,
+                    "MyPlugin.Loader.ProxyRebarZonesCommand")
+                { LongDescription = "Импорт DXF мозаики армирования ЛИРА, подтверждение зон в редакторе и размещение дополнительной арматуры плит/фундаментов." },
+                new PushButtonData("CreateRebarAnnotation", "Аннотация\nдоп.арм", path,
+                    "MyPlugin.Loader.ProxyCreateRebarAnnotation")
+                { LongDescription = "Создаёт аннотацию для дополнительной арматуры плит по центру." });
+            var btnRebarZones = (PushButton)stackSlabRebar[0];
+            btnRebarZones.LargeImage = LoadIcon("steel-mesh_32.png");
+            btnRebarZones.Image      = LoadIcon("steel-mesh_16.png");
+            var btnAnnot = (PushButton)stackSlabRebar[1];
             btnAnnot.LargeImage = LoadIcon("slab_32.png");
             btnAnnot.Image      = LoadIcon("slab_16.png");
             btnAnnot.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/Dywl_Y47nVY"));
@@ -185,6 +194,14 @@ namespace MyPlugin.Loader
     {
         public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
             => HotLoader.Run("CreateRebarAnnotation", cd, ref msg, els);
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    [Regeneration(RegenerationOption.Manual)]
+    public class ProxyRebarZonesCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
+            => HotLoader.Run("LiraToRevit.Rebar.RebarZonesCommand", cd, ref msg, els);
     }
 
     [Transaction(TransactionMode.Manual)]

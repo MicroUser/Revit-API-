@@ -2,7 +2,7 @@
 ; Если папка Addins нужной версии не найдена — эта версия просто пропускается
 ; (в отличие от DAN_Plugin.iss/DAN_Plugin2026.iss, которые требуют ровно одну версию).
 #define AppName    "DAN Plugin"
-#define AppVersion "2.0"
+#define AppVersion "2.1"
 #define Publisher  "Daniil Levin"
 
 [Setup]
@@ -33,6 +33,8 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Source: "..\bin\Release\*.dll"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023\DAN_Plugin"; \
     Flags: ignoreversion; Check: Has2023
 Source: "..\bin\Release\Чеклист\checklist.html"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023\DAN_Plugin"; \
+    Flags: ignoreversion; Check: Has2023
+Source: "..\bin\Release\RebarZones\rebar_zones.html"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023\DAN_Plugin\RebarZones"; \
     Flags: ignoreversion; Check: Has2023
 Source: "Manifest.addin"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023"; \
     Flags: ignoreversion; Check: Has2023

@@ -83,7 +83,10 @@ namespace RevitKJChecklist
         private static bool IsReviewer(string username) =>
             Array.Exists(ReadReviewerLogins(), r => string.Equals(r, username, StringComparison.OrdinalIgnoreCase));
 
-        private static string GetSavePath(Document doc)
+        // internal (не private) — этот же файл/путь переиспользует RebarZonesCommand/
+        // RebarZonesWindow (см. LiraToRevit.Rebar.RebarZonesDataStore) для своей секции
+        // "rebar_zones" в том же JSON проекта, что чек-лист и примечания.
+        internal static string GetSavePath(Document doc)
         {
             string path = GetDocumentPath(doc);
             if (!string.IsNullOrEmpty(path))

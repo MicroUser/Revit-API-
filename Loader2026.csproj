@@ -36,6 +36,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\cells.png" />
+    <EmbeddedResource Include="Resources\steel-mesh_32.png" />
+    <EmbeddedResource Include="Resources\steel-mesh_16.png" />
     <EmbeddedResource Include="Resources\slab_32.png" />
     <EmbeddedResource Include="Resources\slab_16.png" />
     <EmbeddedResource Include="Resources\dimension_32.png" />
