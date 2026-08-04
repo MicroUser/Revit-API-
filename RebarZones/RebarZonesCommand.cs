@@ -364,6 +364,17 @@ namespace LiraToRevit.Rebar
                 catch { savedZones = null; }
             }
 
+            // Настраиваемая анкеровка (коэффициент + построчные длины по диаметрам) — общая на
+            // весь проект, не на плиту (см. RebarZonesDataStore.LoadAnchorSettingsJson), тоже
+            // сырой JSON без разбора на C#.
+            object anchor = null;
+            string anchorJson = RebarZonesDataStore.LoadAnchorSettingsJson(doc);
+            if (!string.IsNullOrEmpty(anchorJson))
+            {
+                try { anchor = JsonSerializer.Deserialize<JsonElement>(anchorJson); }
+                catch { anchor = null; }
+            }
+
             var payload = new
             {
                 datasets = BuildDatasetsPayload(datasets.Select(d => (d.Dxf, d.Face, d.Dir)), floor),
@@ -398,6 +409,9 @@ namespace LiraToRevit.Rebar
                 // Полный снимок зон из прошлого сеанса (см. выше) — если есть, редактор
                 // восстанавливает его целиком вместо пересчёта с нуля, см. loadState.
                 savedZones,
+                // Настраиваемая анкеровка из прошлого сеанса (см. выше) — если есть, редактор
+                // применяет коэффициент/построчные длины поверх дефолтных 55d, см. loadState.
+                anchor,
                 // Фундамент — своя логика фоновой арматуры (верх/низ раздельно, дефолт ⌀20).
                 isFoundation,
                 // Вкладки, где контур плиты и габарит DXF разошлись более чем на 20% (см.

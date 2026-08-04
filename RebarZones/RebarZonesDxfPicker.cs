@@ -90,7 +90,7 @@ namespace LiraToRevit.Rebar
             return picked;
         }
 
-        private static bool AskFaceDir(out Face face, out Dir dir)
+        internal static bool AskFaceDir(out Face face, out Dir dir)
         {
             var td = new TaskDialog("Направление и грань")
             {

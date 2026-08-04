@@ -13,6 +13,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <OutputPath>bin2026\$(Configuration)\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Configurations>Debug;Release;Release-LD</Configurations>
     <!-- Проект лежит в корне репозитория вместе с DAN_Plugin2026 — автоглоб (WPF/Page,
          .resx и т.д.) подхватил бы весь чужой исходный код. Loader-у нужен только
          Loader.cs + явные PNG-ресурсы, поэтому автоглоб просто выключен. -->
@@ -22,6 +23,14 @@
   <ItemGroup>
     <Compile Include="Loader.cs" />
   </ItemGroup>
+
+  <!-- Тот же Loader, только с вкладкой ленты "LD" вместо "DAN" — см. LD_BRAND в Loader.cs и
+       Installer/DAN_Plugin_Combined_LD.iss. OutputPath уже параметризован $(Configuration)
+       выше — bin2026\Release-LD\ получается сам собой. -->
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release-LD' ">
+    <DefineConstants>LD_BRAND</DefineConstants>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="RevitAPI">

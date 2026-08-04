@@ -107,18 +107,63 @@ namespace LiraToRevit.Rebar
             SaveAll(filePath, all);
         }
 
+        /// <summary>Стирает историю "уже размещено" для одной вкладки (грань+направление) этой
+        /// плиты — см. кнопку "Сбросить память размещения" (rebar_zones.html, требует пароль,
+        /// намеренно непубличная функция). Саму созданную в Revit арматуру не трогает — только
+        /// снимает пометку в JSON, которая иначе заставляла бы плагин молча пропускать эти зоны
+        /// при следующем размещении (см. RebarZonesWindow.PlaceZones → IsAlreadyPlaced).</summary>
+        public static void ClearPlaced(Document doc, Floor floor, string comboKey)
+        {
+            string filePath = RevitKJChecklist.ChecklistCommand.GetSavePath(doc);
+            var all = LoadAll(filePath);
+            if (!all.TryGetValue(floor.UniqueId, out var fd)) return;
+            if (fd.Placed.Remove(comboKey)) SaveAll(filePath, all);
+        }
+
+        private const string AnchorSectionKey = "rebar_zones_anchor";
+
+        /// <summary>Настраиваемая анкеровка (коэффициент lₐ=K·d и/или построчно исправленные
+        /// длины по диаметрам — см. rebar_zones.html LA_COEF/LA) — общая на весь проект, а не на
+        /// отдельную плиту, поэтому хранится отдельной секцией JSON, а не внутри FloorData.
+        /// Сырой JSON без разбора на C#: при открытии окна просто пробрасывается обратно в
+        /// редактор как есть (см. RebarZonesCommand.BuildInitJson), разбирается только при
+        /// размещении, чтобы применить к PlacementSettings.Anchorage (RebarZonesWindow.PlaceZones).</summary>
+        public static string LoadAnchorSettingsJson(Document doc) =>
+            ProjectDataStore.LoadSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), AnchorSectionKey);
+
+        public static void SaveAnchorSettingsJson(Document doc, string rawJson) =>
+            ProjectDataStore.SaveSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), AnchorSectionKey, rawJson);
+
         /// <summary>Сырой снимок зон (см. FloorData.SavedZonesJson) для этой плиты, если есть.</summary>
         public static string LoadZonesJson(Document doc, Floor floor) =>
             GetOrEmpty(LoadAll(RevitKJChecklist.ChecklistCommand.GetSavePath(doc)), floor).SavedZonesJson;
 
-        /// <summary>Перезаписывает полный снимок зон (все вкладки сразу — JS присылает их все).</summary>
+        /// <summary>Сохраняет снимок зон, СЛИВАЯ его по вкладкам с уже сохранённым на диске, а
+        /// не затирая целиком. zonesJson — {comboKey:[zone,...]} только по вкладкам, загруженным
+        /// В ЭТОЙ сессии (см. window.getStateJSON) — если у пользователя, например, DXF другого
+        /// пользователя не подгрузился, в его сессии будут не все 4 вкладки; полная перезапись
+        /// стёрла бы зоны недостающих вкладок, хотя их никто не трогал. Не защищает от гонки при
+        /// ОДНОВРЕМЕННОМ сохранении из двух Revit-сессий сразу (файл не блокируется) — только от
+        /// потери данных из-за частично загруженной сессии, что и есть типичный случай совместной
+        /// работы через общий сетевой файл.</summary>
         public static void SaveZonesJson(Document doc, Floor floor, string zonesJson)
         {
             string filePath = RevitKJChecklist.ChecklistCommand.GetSavePath(doc);
             var all = LoadAll(filePath);
             if (!all.TryGetValue(floor.UniqueId, out var fd)) { fd = new FloorData(); all[floor.UniqueId] = fd; }
-            fd.SavedZonesJson = zonesJson;
+
+            var merged = ParseZonesDict(fd.SavedZonesJson);
+            foreach (var kv in ParseZonesDict(zonesJson)) merged[kv.Key] = kv.Value;
+            fd.SavedZonesJson = JsonSerializer.Serialize(merged);
+
             SaveAll(filePath, all);
+        }
+
+        private static Dictionary<string, JsonElement> ParseZonesDict(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return new Dictionary<string, JsonElement>();
+            try { return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json) ?? new Dictionary<string, JsonElement>(); }
+            catch { return new Dictionary<string, JsonElement>(); }
         }
     }
 }

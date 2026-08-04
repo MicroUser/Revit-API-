@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Анализ марок допармирования плит</title>
+<style>
+:root{
+  --bg:#14171c; --panel:#1b2027; --panel2:#20262f; --line:#2c343f;
+  --tx:#dde4ec; --tx2:#8b96a5; --tx3:#5c6673;
+  --amber:#ffb020; --red:#ff4d5e; --green:#3ecf8e; --blue:#4da3ff;
+  --mono:ui-monospace,'Cascadia Code','JetBrains Mono',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--tx);font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;display:flex;flex-direction:column;overflow-y:auto}
+#top{display:flex;align-items:center;gap:16px;padding:0 16px;height:52px;background:var(--panel);border-bottom:1px solid var(--line);flex:none;position:sticky;top:0;z-index:2}
+#logo{font-family:var(--mono);font-size:12px;color:var(--tx2);letter-spacing:.08em;text-transform:uppercase}
+#logo b{color:var(--amber)}
+#title{font-size:14px;font-weight:600}
+#spacer{flex:1}
+#fileCount{font-family:var(--mono);font-size:12px;padding:6px 12px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--tx2)}
+#notesBtn{font-family:var(--mono);font-size:12px;padding:6px 12px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--tx2);cursor:pointer}
+#notesBtn.has{border-color:var(--amber);color:var(--amber)}
+#loadDxfBtn{font-family:var(--mono);font-size:12px;padding:6px 12px;border-radius:6px;background:var(--panel2);border:1px solid var(--amber);color:var(--amber);cursor:pointer}
+#loadDxfBtn:hover{background:#2a2013}
+#main{flex:1;padding:18px 22px;display:flex;flex-direction:column;gap:18px;max-width:1400px;width:100%;margin:0 auto}
+.hudbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.hudbox h2{font-size:14px;margin-bottom:10px}
+.hudbox h2 .sub{font-size:11px;color:var(--tx3);font-weight:400;margin-left:8px}
+.ctrls{display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.ctrl{display:flex;flex-direction:column;gap:4px}
+.ctrl label{font-size:11px;color:var(--tx2)}
+.ctrl input,.ctrl select{width:70px;background:var(--bg);border:1px solid var(--line);color:var(--tx);font-family:var(--mono);font-size:13px;padding:6px 8px;border-radius:6px}
+.ctrl input:focus,.ctrl select:focus{outline:none;border-color:var(--amber)}
+.hint{font-size:10px;color:var(--tx3);line-height:1.4;max-width:260px}
+table.rep{width:100%;border-collapse:collapse;font-size:12px}
+table.rep th{text-align:left;font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;padding:6px 8px;border-bottom:1px solid var(--line)}
+table.rep td{padding:6px 8px;border-bottom:1px solid #202730;font-family:var(--mono)}
+table.rep tr:last-child td{border-bottom:none}
+table.rep tr.groupfirst td{border-top:1px solid var(--line)}
+.mark{font-weight:700;color:var(--amber)}
+.pct-ok{color:var(--green)}
+.pct-warn{color:var(--red)}
+.pct-none{color:var(--tx3)}
+.clusterTag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:4px;background:var(--panel2);color:var(--tx2);margin-right:6px}
+.combos{font-size:10px;color:var(--tx3)}
+.combos b{color:var(--tx2)}
+.reason-geom{color:var(--blue);font-size:11px}
+.reason-arm{color:var(--amber);font-size:11px}
+#tabs{display:flex;gap:2px}
+.tab{padding:7px 14px;border:1px solid var(--line);background:var(--panel2);color:var(--tx2);cursor:pointer;font-size:12px;border-radius:6px 6px 0 0;border-bottom:none}
+.tab.on{background:var(--panel);color:var(--tx);font-weight:600;border-color:var(--amber)}
+.tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;background:var(--tx3)}
+.tab.has .dot{background:var(--green)}
+#tabBody{border:1px solid var(--line);border-top:none;border-radius:0 0 10px 10px;padding:14px 16px;background:var(--panel)}
+.warn-badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:4px;background:#3d2c14;color:var(--amber);margin-left:6px}
+#cmpList{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.cmpChip{font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--tx2);cursor:pointer;user-select:none}
+.cmpChip.on{border-color:var(--amber);color:var(--amber);background:#2a2013}
+#notesPanel{display:none;background:var(--panel);border:1px solid var(--amber);border-radius:10px;padding:14px 16px;font-size:12px;line-height:1.6;color:var(--tx2)}
+#notesPanel.open{display:block}
+#notesPanel .row{padding:2px 0}
+#empty{padding:60px 20px;text-align:center;color:var(--tx3)}
+</style></head><body>
+<div id="top">
+  <div id="logo">ЛИРА→REVIT <b>Марки</b></div>
+  <div id="title">Анализ марок допармирования плит</div>
+  <div id="spacer"></div>
+  <div id="loadDxfBtn">📁 Загрузить DXF</div>
+  <div id="fileCount">файлов: 0</div>
+  <div id="notesBtn">примечания</div>
+</div>
+<div id="main">
+  <div id="notesPanel"></div>
+  <div id="empty">Файлы не загружены.</div>
+  <div id="content" style="display:none">
+
+    <div class="hudbox">
+      <h2>Фоновая арматура <span class="sub">As считается только СВЕРХ неё — это и есть допармирование</span></h2>
+      <div class="ctrls">
+        <div class="ctrl">
+          <label>⌀</label>
+          <select id="bgD"></select>
+        </div>
+        <div class="ctrl">
+          <label>шаг</label>
+          <select id="bgS"></select>
+        </div>
+        <div class="hint" id="bgCapHint"></div>
+      </div>
+    </div>
+
+    <div class="hudbox">
+      <h2>Предложенные марки <span class="sub">сквозная нумерация Пм-N по всему зданию, снизу вверх</span></h2>
+      <div class="ctrls">
+        <div class="ctrl">
+          <label>% шаг сравнения (группировка по маркам)</label>
+          <input type="number" id="thGroup" value="10" min="0" step="1">
+        </div>
+        <div class="ctrl">
+          <label>% допуск геометрии (одна и та же плита)</label>
+          <input type="number" id="thGeom" value="15" min="0" step="1">
+        </div>
+        <div class="hint">Все настройки пересчитывают отчёт мгновенно, без повторной загрузки файлов. Геометрия — ограничивающее условие: объединить в марку можно только плиты с совпадающим контуром. As здесь — суммарная потребность в доп. арматуре по плите (см²·м), не средняя интенсивность: растёт и от того, насколько не хватает фона, и от площади, где не хватает.</div>
+      </div>
+      <table class="rep" id="repTable"><thead><tr>
+        <th>Отметка</th><th>Марка</th><th>% отличия в группе</th><th>Состав (итого доп. As)</th><th>Причина смены марки</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="hudbox">
+      <h2>По направлениям <span class="sub">диагностика — какое направление armирования тянет отличие</span></h2>
+      <div id="tabs"></div>
+      <div id="tabBody"></div>
+    </div>
+
+    <div class="hudbox">
+      <h2>Свободное сравнение <span class="sub">выберите любые загруженные плиты</span></h2>
+      <div id="cmpList"></div>
+      <table class="rep" id="cmpTable"><thead><tr>
+        <th>Отметка</th><th>Верх·X</th><th>Верх·Y</th><th>Низ·X</th><th>Низ·Y</th><th>Итого доп. As</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+
+  </div>
+</div>
+<script>
+"use strict";
+
+// ── геометрия ──
+const polyArea=p=>{let s=0;for(let i=0,j=p.length-1;i<p.length;j=i++)s+=p[j][0]*p[i][1]-p[i][0]*p[j][1];return Math.abs(s)/2;};
+const comboLabel=key=>{const p=key.split('-');return (p[0]==='bottom'?'Низ':'Верх')+' · '+p[1].toUpperCase();};
+const TAB_ORDER=['top-x','top-y','bottom-x','bottom-y'];
+const fmtZ=v=>(v>=0?'+':'')+v.toFixed(3);
+const fmtAs=v=>v.toFixed(2);
+
+// ── фоновая (основная) арматура — одна на весь загруженный батч (не по каждой плите
+// отдельно): As из DXF ЛИРА — это ВСЯ требуемая арматура в точке, включая то, что и так
+// покрывает фоновая сетка. Марки-группы должны сравнивать именно ДОПОЛНИТЕЛЬНУЮ арматуру
+// (то, что сверх фона) — иначе плиты с одинаковой доп.арматурой, но разным фоном (не
+// бывает в рамках одного здания, но и не проверяется) или просто из-за общего уровня As
+// выглядели бы более/менее похожими, чем есть на самом деле по факту укладки допки.
+// Таблица ABAR/список диаметров — те же значения, что в rebar_zones.html.
+const ABAR={8:0.503,10:0.785,12:1.131,14:1.539,16:2.011,18:2.545,20:3.142,22:3.801,25:4.909,28:6.158};
+const BG_DIAMS=[10,12,14,16,18,20,22];
+const BG_STEPS=[100,200,300,400];
+let BGd=10,BGs=200;
+const capBG=()=>+(ABAR[BGd]*1000/BGs).toFixed(2);
+
+// ── на файл: отметка (медиана Z), СУММАРНАЯ доп. арматура (не среднее) и пик, габарит ──
+// По просьбе пользователя — важно суммарное количество доп. арматуры на плиту (потребность
+// в металле), а не средняя интенсивность по площади: totalAs = Σ(доп_i × площадь_i) по всем
+// ячейкам — растёт и от интенсивности, и от площади, где допка реально нужна. Единицы —
+// см²·м: сопоставимая величина для сравнения плит между собой, не буквальная масса стержней
+// (точный подсчёт по факту раскладки стержней инструмент сознательно не делает — см. причину
+// отказа от генератора зон выше).
+function fileStats(f){
+  const zs=[];let totalArea=0,sumAdd=0,peak=0;
+  let minX=1e18,maxX=-1e18,minY=1e18,maxY=-1e18;
+  const bg=capBG();
+  f.cells.forEach(c=>{
+    c.p.forEach(pt=>{zs.push(pt[2]);minX=Math.min(minX,pt[0]);maxX=Math.max(maxX,pt[0]);minY=Math.min(minY,pt[1]);maxY=Math.max(maxY,pt[1]);});
+    const area=polyArea(c.p.map(pt=>[pt[0],pt[1]]));
+    totalArea+=area;
+    if(c.hasValue){
+      const add=Math.max(0,c.a-bg);           // сколько нужно СВЕРХ фона в этой ячейке
+      sumAdd+=add*area;
+      if(add>peak)peak=add;
+    }
+  });
+  zs.sort((a,b)=>a-b);
+  const elevation=zs.length?zs[Math.floor(zs.length/2)]:0;
+  const zSpread=zs.length?(zs[zs.length-1]-zs[0]):0;
+  return {
+    fileName:f.fileName,comboKey:f.comboKey,faceDirSource:f.faceDirSource,
+    elevation,zSpread,zWarning:zSpread>0.02,
+    totalAs:sumAdd, peakAs:peak,
+    bbox:{x1:minX,x2:maxX,y1:minY,y2:maxY}
+  };
+}
+const bboxArea=b=>Math.max(0,b.x2-b.x1)*Math.max(0,b.y2-b.y1);
+const bboxCenter=b=>[(b.x1+b.x2)/2,(b.y1+b.y2)/2];
+function areaDiffPct(a,b){
+  const A=bboxArea(a.bbox),B=bboxArea(b.bbox),m=Math.max(A,B);
+  return m>0?Math.abs(A-B)/m*100:0;
+}
+function colocated(a,b){
+  const [cxA,cyA]=bboxCenter(a.bbox),[cxB,cyB]=bboxCenter(b.bbox);
+  const dist=Math.hypot(cxA-cxB,cyA-cyB);
+  const tol=Math.max(0.3,0.05*Math.sqrt(Math.max(bboxArea(a.bbox),bboxArea(b.bbox))));
+  return dist<=tol;
+}
+
+// ── шаг 1: сборка "плиты" из файлов одной отметки/позиции (до 4 combo) ──
+const BUNDLE_Z_TOL=0.05, BUNDLE_AREA_PCT=5;
+function bundlePlates(files){
+  const remaining=files.slice(),plates=[],notes=[];
+  let seq=0;
+  while(remaining.length){
+    const seed=remaining.shift(),group=[seed];
+    for(let i=remaining.length-1;i>=0;i--){
+      const f=remaining[i];
+      if(Math.abs(f.elevation-seed.elevation)<=BUNDLE_Z_TOL && areaDiffPct(f,seed)<=BUNDLE_AREA_PCT && colocated(f,seed)){
+        group.push(f);remaining.splice(i,1);
+      }
+    }
+    const combos={};
+    group.forEach(f=>{
+      if(combos[f.comboKey]){
+        notes.push(f.fileName+' и '+combos[f.comboKey].fileName+' — оба совпали как «'+comboLabel(f.comboKey)+'» для одной плиты; использован '+combos[f.comboKey].fileName+'.');
+      }else combos[f.comboKey]=f;
+    });
+    const elevs=group.map(f=>f.elevation).sort((a,b)=>a-b);
+    const elevation=elevs[Math.floor(elevs.length/2)];
+    const bbox={x1:Math.min(...group.map(f=>f.bbox.x1)),x2:Math.max(...group.map(f=>f.bbox.x2)),
+                y1:Math.min(...group.map(f=>f.bbox.y1)),y2:Math.max(...group.map(f=>f.bbox.y2))};
+    // overallAs — СУММА по всем загруженным направлениям (Верх/Низ × X/Y), не среднее:
+    // стержни по X, по Y, сверху и снизу — это разные, дополняющие друг друга объёмы металла,
+    // при подсчёте суммарной потребности их складывают, а не усредняют.
+    const overallAs=Object.keys(combos).reduce((s,k)=>s+combos[k].totalAs,0);
+    plates.push({
+      id:'P'+(++seq),elevation,bbox,combos,
+      overallAs,peakAsOverall:Math.max(0,...group.map(f=>f.peakAs)),
+      zWarning:group.some(f=>f.zWarning)
+    });
+  }
+  return {plates,notes};
+}
+
+// ── шаг 2: кластеризация плит по геометрии через все отметки ──
+function clusterPlates(plates,thPct){
+  const remaining=plates.slice(),clusters=[];
+  while(remaining.length){
+    const seed=remaining.shift(),group=[seed];
+    for(let i=remaining.length-1;i>=0;i--){
+      const p=remaining[i];
+      if(areaDiffPct(p,seed)<=thPct && colocated(p,seed)){group.push(p);remaining.splice(i,1);}
+    }
+    group.sort((a,b)=>a.elevation-b.elevation);
+    clusters.push(group);
+  }
+  clusters.sort((a,b)=>a[0].elevation-b[0].elevation);
+  return clusters;
+}
+
+// ── шаг 3: жадная группировка внутри кластера снизу вверх ──
+function groupCluster(members,thPct){
+  const groups=[];
+  let start=0,groupMax=members[0].overallAs;
+  for(let i=1;i<members.length;i++){
+    const candidateMax=Math.max(groupMax,members[i].overallAs);
+    let allWithin=true;
+    for(let j=start;j<=i;j++){
+      const diff=candidateMax>0?(candidateMax-members[j].overallAs)/candidateMax*100:0;
+      if(diff>thPct){allWithin=false;break;}
+    }
+    if(allWithin)groupMax=candidateMax;
+    else{groups.push({members:members.slice(start,i),max:groupMax});start=i;groupMax=members[i].overallAs;}
+  }
+  groups.push({members:members.slice(start),max:groupMax});
+  return groups;
+}
+
+// марки — сквозная нумерация по всему зданию (кластеры по возрастанию мин. отметки,
+// внутри кластера — по возрастанию отметки, естественный порядок формирования групп).
+function buildReport(clusters,thGroup){
+  let markSeq=0;const rows=[];
+  clusters.forEach((cluster,ci)=>{
+    groupCluster(cluster,thGroup).forEach(g=>{
+      markSeq++;
+      const mark='Пм-'+markSeq;
+      g.members.forEach(m=>{
+        const pct=g.members.length>1?((g.max-m.overallAs)/g.max*100):null;
+        rows.push({plate:m,mark,clusterIdx:ci,pct});
+      });
+    });
+  });
+  return rows;
+}
+
+// ── причина смены марки — не часть алгоритма группировки, чисто для отчёта: сравнение
+// строки, где марка сменилась, с предыдущей строкой ТАБЛИЦЫ (не с "физическим соседом снизу",
+// хотя внутри одного кластера это одно и то же — строки идут по возрастанию отметки).
+// Смена кластера — геометрия/позиция не совпала (см. clusterPlates); смена группы внутри
+// того же кластера — Aₛ вышло за порог сравнения (см. groupCluster). Первая строка отчёта и
+// строки внутри одной и той же марки — причины не показываем (нет смены — нечего объяснять).
+function withReasons(rows){
+  return rows.map((r,i)=>{
+    if(i===0||r.mark===rows[i-1].mark) return Object.assign({},r,{reason:null});
+    const prev=rows[i-1];
+    if(r.clusterIdx!==prev.clusterIdx){
+      return Object.assign({},r,{reason:{type:'geom',
+        text:'другая плита — контур/площадь не совпали с предыдущей'}});
+    }
+    const from=prev.plate.overallAs,to=r.plate.overallAs;
+    const pct=from>0?(to-from)/from*100:0;
+    return Object.assign({},r,{reason:{type:'arm',
+      text:'изменение армирования: '+fmtAs(from)+' → '+fmtAs(to)+' см²·м ('+(pct>=0?'+':'')+pct.toFixed(1)+'%)'}});
+  });
+}
+
+// ── состояние ──
+let PLATES=[],NOTES=[],CMP_SELECTED=new Set(),ACTIVE_TAB='top-x';
+
+function recompute(){
+  const thGroup=+document.getElementById('thGroup').value||0;
+  const thGeom=+document.getElementById('thGeom').value||0;
+  const clusters=clusterPlates(PLATES,thGeom);
+  const rows=withReasons(buildReport(clusters,thGroup));
+  renderReport(rows);
+}
+
+function renderReport(rows){
+  const tb=document.querySelector('#repTable tbody');
+  let lastMark=null;
+  tb.innerHTML=rows.map(r=>{
+    const firstOfGroup=r.mark!==lastMark;lastMark=r.mark;
+    const pctText=r.pct===null?'—':r.pct.toFixed(1)+'%';
+    const pctClass=r.pct===null?'pct-none':(r.pct<1e-9?'pct-ok':(r.pct>0?'pct-warn':'pct-ok'));
+    const combosText=Object.keys(r.plate.combos).map(k=>comboLabel(k)+' '+fmtAs(r.plate.combos[k].totalAs)).join(' · ');
+    const reasonText=r.reason?r.reason.text:'';
+    const reasonClass=r.reason?('reason-'+r.reason.type):'';
+    return '<tr'+(firstOfGroup?' class="groupfirst"':'')+'>'+
+      '<td>'+fmtZ(r.plate.elevation)+(r.plate.zWarning?'<span class="warn-badge">⚠ Z</span>':'')+'</td>'+
+      '<td class="mark">'+r.mark+'</td>'+
+      '<td class="'+pctClass+'">'+pctText+'</td>'+
+      '<td class="combos"><b>'+fmtAs(r.plate.overallAs)+'</b> · '+combosText+'</td>'+
+      '<td class="'+reasonClass+'">'+reasonText+'</td>'+
+    '</tr>';
+  }).join('') || '<tr><td colspan="5" style="color:var(--tx3)">Нет данных</td></tr>';
+}
+
+function renderTabs(){
+  const el=document.getElementById('tabs');
+  el.innerHTML=TAB_ORDER.map(k=>{
+    const has=PLATES.some(p=>p.combos[k]);
+    return '<div class="tab'+(k===ACTIVE_TAB?' on':'')+(has?' has':'')+'" data-k="'+k+'"><span class="dot"></span>'+comboLabel(k)+'</div>';
+  }).join('');
+  el.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ACTIVE_TAB=t.dataset.k;renderTabs();renderTabBody();});
+}
+
+function renderTabBody(){
+  const el=document.getElementById('tabBody');
+  const withCombo=PLATES.filter(p=>p.combos[ACTIVE_TAB]).sort((a,b)=>a.elevation-b.elevation);
+  if(!withCombo.length){el.innerHTML='<div style="color:var(--tx3)">Для этого направления не загружено ни одной плиты.</div>';return;}
+  el.innerHTML='<table class="rep"><thead><tr><th>Отметка</th><th>Файл</th><th>Доп. As (сумма)</th><th>Доп. As (пик)</th><th>Грань/направление</th></tr></thead><tbody>'+
+    withCombo.map(p=>{
+      const f=p.combos[ACTIVE_TAB];
+      return '<tr><td>'+fmtZ(p.elevation)+(f.zWarning?'<span class="warn-badge">⚠ Z</span>':'')+'</td>'+
+        '<td>'+f.fileName+'</td><td>'+fmtAs(f.totalAs)+'</td><td>'+fmtAs(f.peakAs)+'</td>'+
+        '<td>'+(f.faceDirSource==='manual'?'вручную':'из легенды')+'</td></tr>';
+    }).join('')+'</tbody></table>';
+}
+
+function renderCmpList(){
+  const el=document.getElementById('cmpList');
+  const sorted=PLATES.slice().sort((a,b)=>a.elevation-b.elevation);
+  el.innerHTML=sorted.map(p=>'<div class="cmpChip'+(CMP_SELECTED.has(p.id)?' on':'')+'" data-id="'+p.id+'">'+fmtZ(p.elevation)+'</div>').join('');
+  el.querySelectorAll('.cmpChip').forEach(c=>c.onclick=()=>{
+    const id=c.dataset.id;
+    if(CMP_SELECTED.has(id))CMP_SELECTED.delete(id);else CMP_SELECTED.add(id);
+    renderCmpList();renderCmpTable();
+  });
+}
+
+function renderCmpTable(){
+  const tb=document.querySelector('#cmpTable tbody');
+  const sel=PLATES.filter(p=>CMP_SELECTED.has(p.id)).sort((a,b)=>a.elevation-b.elevation);
+  tb.innerHTML=sel.map(p=>{
+    const cell=k=>p.combos[k]?fmtAs(p.combos[k].totalAs):'—';
+    return '<tr><td>'+fmtZ(p.elevation)+'</td><td>'+cell('top-x')+'</td><td>'+cell('top-y')+'</td>'+
+      '<td>'+cell('bottom-x')+'</td><td>'+cell('bottom-y')+'</td><td><b>'+fmtAs(p.overallAs)+'</b></td></tr>';
+  }).join('') || '<tr><td colspan="6" style="color:var(--tx3)">Выберите плиты выше</td></tr>';
+}
+
+function renderNotes(){
+  const btn=document.getElementById('notesBtn');
+  const panel=document.getElementById('notesPanel');
+  btn.classList.toggle('has',NOTES.length>0);
+  btn.textContent='примечания'+(NOTES.length?' ('+NOTES.length+')':'');
+  panel.innerHTML=NOTES.map(n=>'<div class="row">⚑ '+n+'</div>').join('');
+  btn.onclick=()=>panel.classList.toggle('open');
+}
+
+document.getElementById('thGroup').onchange=recompute;
+document.getElementById('thGeom').onchange=recompute;
+
+// ── настройка фона (⌀/шаг) ──
+(function(){
+  const dS=document.getElementById('bgD'),sS=document.getElementById('bgS');
+  dS.innerHTML=BG_DIAMS.map(d=>'<option'+(d===BGd?' selected':'')+'>'+d+'</option>').join('');
+  sS.innerHTML=BG_STEPS.map(s=>'<option'+(s===BGs?' selected':'')+'>'+s+'</option>').join('');
+  const upd=()=>{document.getElementById('bgCapHint').textContent=
+    'фон s'+BGs+'d'+BGd+' несёт '+capBG()+' см²/м — As в отчёте везде считается сверх этого значения';};
+  const apply=()=>{BGd=+dS.value;BGs=+sS.value;upd();rebuildAndRender();};
+  dS.onchange=apply;sS.onchange=apply;
+  upd();
+})();
+
+// Сырые файлы (с ячейками) копятся по всем загрузкам за сеанс (первое открытие + любые
+// последующие "📁 Загрузить DXF") — хранятся ОТДЕЛЬНО от посчитанной по ним fileStats, потому
+// что fileStats зависит от настройки фона (см. выше) и должна пересчитываться заново при её
+// смене, не только при новой загрузке файлов. По той же причине "постоянные" note от C#
+// (пропущенные/битые файлы) хранятся отдельно от note, которые генерирует сборка плит
+// (bundlePlates) — те пересчитываются с нуля при каждом rebuildAndRender, не копятся.
+let ALL_RAW_FILES=[],PERSISTENT_NOTES=[];
+
+function rebuildAndRender(){
+  document.getElementById('fileCount').textContent='файлов: '+ALL_RAW_FILES.length;
+
+  if(!ALL_RAW_FILES.length){
+    document.getElementById('empty').style.display='block';
+    document.getElementById('content').style.display='none';
+    NOTES=PERSISTENT_NOTES.slice();
+    renderNotes();
+    return;
+  }
+  document.getElementById('empty').style.display='none';
+  document.getElementById('content').style.display='block';
+
+  const bundled=bundlePlates(ALL_RAW_FILES.map(fileStats));
+  PLATES=bundled.plates;
+  NOTES=PERSISTENT_NOTES.concat(bundled.notes);
+
+  renderNotes();
+  recompute();
+  renderTabs();
+  renderTabBody();
+  renderCmpList();
+  renderCmpTable();
+}
+
+function applyPayload(payload,isAdd){
+  ALL_RAW_FILES=isAdd?ALL_RAW_FILES.concat(payload.files||[]):(payload.files||[]);
+  PERSISTENT_NOTES=isAdd?PERSISTENT_NOTES.concat(payload.notes||[]):(payload.notes||[]).slice();
+  rebuildAndRender();
+}
+
+// вызывается из C# (SlabMarkWindow) при первом открытии — payload:
+// {files:[{fileName,comboKey,faceDirSource,cells:[{p:[[x,y,z],...],a,hasValue}]}], notes:[...]}
+window.loadState=function(json){
+  applyPayload(typeof json==='string'?JSON.parse(json):json, false);
+};
+
+// вызывается из C# (SlabMarkWindow.LoadDxfRequested) по кнопке "📁 Загрузить DXF" — та же форма
+// payload, что и loadState, но ДОБАВЛЯЕТ к уже загруженному в этой сессии, не заменяя.
+window.addFiles=function(json){
+  applyPayload(typeof json==='string'?JSON.parse(json):json, true);
+};
+
+document.getElementById('loadDxfBtn').onclick=()=>{
+  if(window.chrome&&window.chrome.webview){
+    window.chrome.webview.postMessage('loaddxf:');
+  }else{
+    alert('Демо (нет связи с Revit): выбор DXF недоступен вне Revit');
+  }
+};
+</script>
+</body></html>

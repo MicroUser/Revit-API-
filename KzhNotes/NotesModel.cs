@@ -183,7 +183,11 @@ namespace KzhNotes
             if (!keyFound)
                 sections.Add(new KeyValuePair<string, string>(key, rawJson));
 
-            Directory.CreateDirectory(Path.GetDirectoryName(filePath));
+            // Пустая (но не null) директория означает, что filePath — просто имя файла без
+            // папки (относительный путь) — создавать нечего, CreateDirectory("") на .NET 8
+            // (Revit 2026) кидает ArgumentException, хотя на .NET Framework молча проходил.
+            string dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
             var sb = new StringBuilder();
             sb.Append("{\r\n");

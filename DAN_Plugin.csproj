@@ -108,11 +108,23 @@
     <Compile Include="Collisions.cs" />
     <Compile Include="ScheduleCreate.cs" />
     <Compile Include="RebarZones\RebarPlacer.cs" />
+    <Compile Include="RebarZones\RebarUnits.cs" />
+    <Compile Include="RebarZones\RebarModels.cs" />
+    <Compile Include="RebarZones\SlabGeometry.cs" />
+    <Compile Include="RebarZones\BandSplitter.cs" />
+    <Compile Include="RebarZones\ZoneConflictResolver.cs" />
+    <Compile Include="RebarZones\RebarTypeResolver.cs" />
+    <Compile Include="RebarZones\SupportDetector.cs" />
+    <Compile Include="RebarZones\BarLengthCalculator.cs" />
+    <Compile Include="RebarZones\RebarBuilder.cs" />
     <Compile Include="RebarZones\DxfArmoringImport.cs" />
     <Compile Include="RebarZones\RebarZonesWindow.cs" />
     <Compile Include="RebarZones\RebarZonesCommand.cs" />
     <Compile Include="RebarZones\RebarZonesDataStore.cs" />
     <Compile Include="RebarZones\RebarZonesDxfPicker.cs" />
+    <Compile Include="RebarZones\SlabMarkCommand.cs" />
+    <Compile Include="RebarZones\SlabMarkDxfPicker.cs" />
+    <Compile Include="RebarZones\SlabMarkWindow.cs" />
     <Compile Include="KzhNotes\NotesCommand.cs" />
     <Compile Include="KzhNotes\NotesEngine.cs" />
     <Compile Include="KzhNotes\NotesLibrary.cs" />
@@ -159,6 +171,9 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="RebarZones\rebar_zones.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="RebarZones\slab_mark_report.html">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

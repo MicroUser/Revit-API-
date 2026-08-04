@@ -23,6 +23,15 @@
     <Optimize>true</Optimize>
     <OutputPath>bin\Release\</OutputPath>
   </PropertyGroup>
+  <!-- Тот же Loader, только с вкладкой ленты "LD" вместо "DAN" — см. LD_BRAND в Loader.cs и
+       Installer/DAN_Plugin_Combined_LD.iss (собирает отдельный установщик из этого Loader.dll
+       + обычного DAN_Plugin.dll из bin\Release, тот же путь установки/manifest). -->
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release-LD|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release-LD\</OutputPath>
+    <DefineConstants>LD_BRAND</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
     <Reference Include="RevitAPI">

@@ -89,15 +89,33 @@ namespace RevitKJChecklist
         internal static string GetSavePath(Document doc)
         {
             string path = GetDocumentPath(doc);
-            if (!string.IsNullOrEmpty(path))
+            string dir = !string.IsNullOrEmpty(path) ? Path.GetDirectoryName(path) : null;
+            // dir может быть пустой строкой (не null!), если path — просто имя файла без
+            // папки: так бывает у PathName для облачных (BIM 360/ACC) моделей в Revit 2026 —
+            // Path.GetDirectoryName("") дальше ломает Directory.CreateDirectory в
+            // ProjectDataStore.SaveSection ("The value cannot be an empty string"). В этом
+            // случае, как и при полностью пустом path, уходим в запасной путь в AppData.
+            if (!string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(dir))
             {
-                string dir  = Path.GetDirectoryName(path);
                 string stem = Path.GetFileNameWithoutExtension(path);
                 return Path.Combine(dir, stem + "_kzh.json");
             }
+            // Запасной путь — один файл на документ (по имени модели), а не общий
+            // "unsaved.json" на все облачные/несохранённые проекты сразу: иначе чек-лист,
+            // примечания и допармирование разных облачных моделей перезаписывали бы друг друга.
+            string safeTitle = SanitizeFileName(doc.Title);
+            string fileName = string.IsNullOrEmpty(safeTitle) ? "unsaved.json" : safeTitle + "_kzh.json";
             return Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "RevitKJChecklist", "unsaved.json");
+                "RevitKJChecklist", fileName);
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            char[] invalid = Path.GetInvalidFileNameChars();
+            string cleaned = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+            return cleaned.Length > 0 ? cleaned : null;
         }
 
         // Для workshared-моделей возвращает путь к центральному файлу,

@@ -11,8 +11,8 @@ using LiraToRevit.Rebar;
 namespace DAN_Plugin
 {
     // ─────────────────────────────────────────────────────────────────────────
-    // Диагностика подбора Г/П-образной формы у края плиты (см. RebarPlacer.HasParallelSupport
-    // в RebarZones\RebarPlacer.cs): выбираем плиту и точку рядом со стеной/колонной, которую
+    // Диагностика подбора Г/П-образной формы у края плиты (см. SupportDetector.HasParallelSupport
+    // в RebarZones\SupportDetector.cs): выбираем плиту и точку рядом со стеной/колонной, которую
     // нужно проверить, и получаем — сколько опор («Категория именования» = Стены/Несущие
     // колонны) вообще найдено в проекте, их габариты и LongAxisIsX, ближайшую грань контура
     // плиты у указанной точки и итоговый вердикт (параллельна/перпендикулярна) для каждой
@@ -52,22 +52,22 @@ namespace DAN_Plugin
             catch (Autodesk.Revit.Exceptions.OperationCanceledException) { return Result.Cancelled; }
 
             var settings = new PlacementSettings();
-            List<RebarPlacer.SupportInfo> allSupports = RebarPlacer.ResolveSupports(doc, settings);
+            List<SupportDetector.SupportInfo> allSupports = SupportDetector.ResolveSupports(doc, settings);
             SlabGeometry slab = SlabGeometry.From(doc, floor);
             XYZ tangent = slab.NearestBoundaryTangent(pt);
 
             // Сборка может содержать стены/колонны сразу нескольких этажей (одна и та же стена,
             // стоящая друг над другом на уровнях 1,2,3...) — оставляем только те, что по высоте
-            // относятся к ВЫБРАННОЙ плите (см. RebarPlacer.SupportZToleranceMm).
+            // относятся к ВЫБРАННОЙ плите (см. SupportDetector.SupportZToleranceMm).
             Level floorLevel = doc.GetElement(floor.LevelId) as Level;
             double floorZ = floorLevel?.Elevation ?? pt.Z;
-            double zTol = UnitUtils.ConvertToInternalUnits(RebarPlacer.SupportZToleranceMm, UnitTypeId.Millimeters);
-            List<RebarPlacer.SupportInfo> supports = allSupports
+            double zTol = UnitUtils.ConvertToInternalUnits(SupportDetector.SupportZToleranceMm, UnitTypeId.Millimeters);
+            List<SupportDetector.SupportInfo> supports = allSupports
                 .Where(s => floorZ >= s.BBoxMin.Z - zTol && floorZ <= s.BBoxMax.Z + zTol)
                 .ToList();
 
             double MmX(double ft) => UnitUtils.ConvertFromInternalUnits(ft, UnitTypeId.Millimeters);
-            double DistTo(RebarPlacer.SupportInfo s, XYZ p)
+            double DistTo(SupportDetector.SupportInfo s, XYZ p)
             {
                 double cx = Math.Max(s.BBoxMin.X, Math.Min(p.X, s.BBoxMax.X));
                 double cy = Math.Max(s.BBoxMin.Y, Math.Min(p.Y, s.BBoxMax.Y));
@@ -77,7 +77,7 @@ namespace DAN_Plugin
 
             var sb = new StringBuilder();
             sb.AppendLine($"Опор найдено в проекте (\"Категория именования\" = Стены/Несущие колонны): {allSupports.Count}");
-            sb.AppendLine($"  из них по высоте относятся к выбранной плите (уровень={MmX(floorZ):0}мм, допуск±{RebarPlacer.SupportZToleranceMm:0}мм): {supports.Count}");
+            sb.AppendLine($"  из них по высоте относятся к выбранной плите (уровень={MmX(floorZ):0}мм, допуск±{SupportDetector.SupportZToleranceMm:0}мм): {supports.Count}");
             sb.AppendLine($"Точка: ({MmX(pt.X):0};{MmX(pt.Y):0}) мм");
 
             // Сырые данные — чтобы понять, на каком шаге теряются опоры, если supports.Count==0:
@@ -90,7 +90,7 @@ namespace DAN_Plugin
             {
                 Parameter p = a.LookupParameter(settings.NamingCategoryParam);
                 if (p != null) withParam++;
-                if (!string.IsNullOrEmpty(RebarPlacer.SupportParamText(doc, p))) withText++;
+                if (!string.IsNullOrEmpty(SupportDetector.SupportParamText(doc, p))) withText++;
             }
             sb.AppendLine();
             sb.AppendLine($"[Сырые данные] Всего сборок (AssemblyInstance) в проекте: {allAssemblies.Count}");
@@ -100,7 +100,7 @@ namespace DAN_Plugin
             foreach (var a in allAssemblies.Take(15))
             {
                 Parameter p = a.LookupParameter(settings.NamingCategoryParam);
-                string text = RebarPlacer.SupportParamText(doc, p);
+                string text = SupportDetector.SupportParamText(doc, p);
                 sb.AppendLine($"    Id={a.Id} текст=\"{text}\"");
             }
             sb.AppendLine();

@@ -1,6 +1,8 @@
-; Комбинированный установщик: ставит DAN_Plugin сразу для Revit 2023 и 2026.
-; Если папка Addins нужной версии не найдена — эта версия просто пропускается
-; (в отличие от DAN_Plugin.iss/DAN_Plugin2026.iss, которые требуют ровно одну версию).
+; Тот же установщик, что DAN_Plugin_Combined.iss (тот же AppId/путь установки/manifest —
+; вторая установка одного из двух вариантов на ту же машину заменяет первую), но ставит
+; Loader.dll из сборки Release-LD (см. Loader.csproj/Loader2026.csproj) — единственное отличие
+; в работе плагина: вкладка ленты Revit называется "LD", а не "DAN" (см. LD_BRAND в Loader.cs).
+; DAN_Plugin.dll и все остальные файлы — те же самые, из обычной сборки Release.
 #define AppName    "DAN Plugin"
 #define AppVersion "2.2"
 #define Publisher  "Daniil Levin"
@@ -17,7 +19,7 @@ DefaultDirName={commonappdata}\Autodesk\Revit\Addins\DAN_Plugin
 DisableDirPage=yes
 
 OutputDir=Output
-OutputBaseFilename=DAN_Plugin_Setup_{#AppVersion}
+OutputBaseFilename=LD_Plugin_Setup_{#AppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -38,6 +40,9 @@ Source: "..\bin\Release\RebarZones\rebar_zones.html"; DestDir: "{commonappdata}\
     Flags: ignoreversion; Check: Has2023
 Source: "..\bin\Release\RebarZones\slab_mark_report.html"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023\DAN_Plugin\RebarZones"; \
     Flags: ignoreversion; Check: Has2023
+; LD-брендированный Loader.dll — идёт ПОСЛЕ общего *.dll выше и перетирает обычный Loader.dll.
+Source: "..\bin\Release-LD\Loader.dll"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023\DAN_Plugin"; \
+    Flags: ignoreversion; Check: Has2023
 Source: "Manifest.addin"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2023"; \
     Flags: ignoreversion; Check: Has2023
 
@@ -49,6 +54,9 @@ Source: "..\bin2026\Release\Чеклист\checklist.html"; DestDir: "{commonapp
 Source: "..\bin2026\Release\RebarZones\rebar_zones.html"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2026\DAN_Plugin\RebarZones"; \
     Flags: ignoreversion; Check: Has2026
 Source: "..\bin2026\Release\RebarZones\slab_mark_report.html"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2026\DAN_Plugin\RebarZones"; \
+    Flags: ignoreversion; Check: Has2026
+; LD-брендированный Loader.dll — идёт ПОСЛЕ общего *.dll выше и перетирает обычный Loader.dll.
+Source: "..\bin2026\Release-LD\Loader.dll"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2026\DAN_Plugin"; \
     Flags: ignoreversion; Check: Has2026
 Source: "Manifest2026.addin"; DestDir: "{commonappdata}\Autodesk\Revit\Addins\2026"; \
     Flags: ignoreversion; Check: Has2026

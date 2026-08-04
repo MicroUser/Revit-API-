@@ -68,6 +68,9 @@
     <Content Include="RebarZones\rebar_zones.html">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+    <Content Include="RebarZones\slab_mark_report.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- Dev-деплой отключён по просьбе — падал с ошибкой "занят другим приложением", когда

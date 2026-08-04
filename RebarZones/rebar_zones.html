@@ -37,7 +37,10 @@ canvas{display:block;width:100%;height:100%}
 #legend{position:absolute;left:12px;top:12px}
 #legend .row{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;padding:2px 0;color:var(--tx2)}
 .chip{width:14px;height:10px;border-radius:2px;flex:none}
-#tools{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px;width:212px}
+#tools{position:absolute;right:12px;top:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;width:212px;overflow-y:auto;overflow-x:hidden;padding-right:4px}
+#tools::-webkit-scrollbar{width:6px}
+#tools::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+#tools::-webkit-scrollbar-track{background:transparent}
 .tool{background:rgba(27,32,39,.93);border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px 11px;font-size:12px;cursor:pointer;text-align:left}
 .tool:hover{border-color:var(--tx3)} .tool.on{border-color:var(--amber);color:var(--amber)}
 .tool:disabled{opacity:.4;cursor:not-allowed}
@@ -118,6 +121,18 @@ canvas{display:block;width:100%;height:100%}
 #settings input{width:54px;background:var(--bg);border:1px solid var(--line);color:var(--tx);font-family:var(--mono);font-size:11px;padding:2px 5px;border-radius:4px}
 #toast{position:absolute;left:50%;transform:translateX(-50%);bottom:20px;background:#242b34;border:1px solid var(--line);padding:9px 16px;border-radius:8px;font-size:12px;display:none}
 .hint{font-size:10px;color:var(--tx3);line-height:1.4;margin-top:6px}
+/* Модалка пароля (см. #tResetPlaced) — свой инпут вместо prompt(), т.к. prompt() показывает
+   введённый текст открытым текстом (можно скопировать/подсмотреть). */
+#pwOverlay{display:none;position:fixed;inset:0;background:rgba(10,12,15,.6);z-index:20;align-items:center;justify-content:center}
+#pwOverlay.on{display:flex}
+#pwBox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;width:280px;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+#pwBox b{font-size:13px}
+#pwBox input{width:100%;margin-top:12px;background:var(--bg);border:1px solid var(--line);color:var(--tx);font-family:var(--mono);font-size:13px;padding:8px 10px;border-radius:6px;letter-spacing:.15em}
+#pwBox input:focus{outline:none;border-color:var(--amber)}
+#pwErr{font-size:11px;color:var(--red);margin-top:6px;min-height:14px}
+#pwBtns{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
+#pwBtns button{border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--tx)}
+#pwBtns button.ok{background:var(--amber);color:#1a1200;border-color:var(--amber);font-weight:700}
 </style></head><body>
 <div id="top">
   <div id="logo"><b>ЛИРА→REVIT</b></div>
@@ -142,23 +157,21 @@ canvas{display:block;width:100%;height:100%}
     <div class="hudbox" id="legend"></div>
     <div id="editbar">
       <span class="lbl" id="ebname"></span>
-      <button class="eb gray" id="ebRect">↺ Вернуть прямоугольник</button>
       <button class="eb" id="ebDone">Готово</button>
     </div>
     <div id="tools">
       <button class="tool on" id="tAnchor">⌐ Габарит с анкеровкой — вкл</button>
-      <button class="tool on" id="tIso">▦ Изолинии допармирования — вкл</button>
-      <button class="tool" id="tValues">№ Значения Aₛ — авто</button>
-      <button class="tool" id="tAcceptAll">✓ Принять все без флагов</button>
-      <button class="tool" id="tUndo" disabled>↶ Отменить</button>
-      <button class="tool" id="tRedo" disabled>↷ Повторить</button>
+      <button class="tool on" id="tIso">▦ Изолинии доп. армирования — вкл</button>
+      <button class="tool" id="tValues">Значение A — авто</button>
+      <button class="tool" id="tAcceptAll">✓ Принять всё</button>
+      <button class="tool" id="tUndo" disabled>↶ Назад</button>
+      <button class="tool" id="tRedo" disabled>↷ Вперёд</button>
       <button class="tool" id="tNew">✚ Новая зона (рамкой)</button>
       <div class="hudbox" id="newDiamPick" style="display:none">
         <div style="font-size:11px;color:var(--tx2);margin-bottom:6px">Диаметр новой зоны:</div>
         <div class="ksel" id="newDiamBtns"></div>
       </div>
-      <button class="tool" id="tMergeB" disabled>⧉ Слить выбранные</button>
-      <button class="tool on" id="tNest">⊂ Объединять пересекающиеся — вкл</button>
+      <button class="tool" id="tMergeB" disabled>⧉ Объединить зоны</button>
       <button class="tool" id="tReset">⟲ Сбросить всё к расчёту</button>
       <button class="tool" id="tSettings">⚙ Настройки</button>
       <div class="hudbox" id="settings">
@@ -180,13 +193,27 @@ canvas{display:block;width:100%;height:100%}
             <span class="cap" id="bgCapTop"></span>
           </div>
         </div>
-        <b style="font-size:12px">Анкеровка lₐ = 55d, мм</b>
+        <b style="font-size:12px">Анкеровка lₐ = <input id="laCoef" style="width:32px" value="55">·d, мм</b>
         <table id="latab"></table>
         <div class="hint">Вылет — только вдоль стержней (X)<br>Пересекающиеся зоны объединяются<br>(заполнение ≥55%, сторона ≤4 м)<br>Деление «змей» при заполнении &lt;50%<br>Сетка: 50 мм вдоль · 200 мм поперёк<br>Унификация длин &lt;100 мм<br>Шаг допки — в карточке зоны</div>
+        <b style="font-size:12px;color:var(--red)">Сброс памяти размещения</b>
+        <div class="hint">Снимает отметки «уже размещено» у зон текущей вкладки — при следующем нажатии «Разместить арматуру» плагин не будет их пропускать. Уже созданную в Revit арматуру не удаляет. Только для доверенных пользователей — требует пароль.</div>
+        <button class="tool" id="tResetPlaced" style="border-color:var(--red);color:#ff9aa3">🔒 Сбросить память размещения</button>
       </div>
     </div>
     <div id="coords">x — · y —</div>
     <div id="toast"></div>
+    <div id="pwOverlay">
+      <div id="pwBox">
+        <b>Пароль для сброса памяти размещения</b>
+        <input type="password" id="pwInput" autocomplete="off">
+        <div id="pwErr"></div>
+        <div id="pwBtns">
+          <button id="pwCancel">Отмена</button>
+          <button class="ok" id="pwOk">Ок</button>
+        </div>
+      </div>
+    </div>
   </div>
   <div id="side">
     <h3>Зоны допармирования · <span id="zcount"></span></h3>
@@ -202,11 +229,15 @@ canvas{display:block;width:100%;height:100%}
 <script>
 "use strict";
 let cells=[];
-const KC={0:'#3a4250',1:'#e8c239',2:'#f0913b',3:'#e5503c',4:'#b3122e',5:'#9b59d0',6:'#5b6ee8',7:'#2fb8a8',8:'#ff2fd6'};
-const KL={1:'+s200d10',2:'+s200d12',3:'+s200d14',4:'+s200d16',5:'+s200d18',6:'+s200d20',7:'+s200d22',8:'СПЕЦ'};
-const LABz=z=>z.k===8?'СПЕЦ':'+s'+z.step+'d'+DIAM[z.k];
-const DIAM={1:10,2:12,3:14,4:16,5:18,6:20,7:22,8:0};
-const ABAR={8:0.503,10:0.785,12:1.131,14:1.539,16:2.011,18:2.545,20:3.142,22:3.801}; // площадь стержня, см²
+// SPEC_K — условный номер "вне шкалы" (Aₛ не покрывается даже максимальным диаметром допки).
+// Не индекс в KORD (позиция диаметра в списке зависит от IS_FOUNDATION — см. curKORD), а
+// отдельный неизменный маркер, чтобы сверка "k===SPEC_K" не путалась при добавлении диаметров.
+const SPEC_K=99;
+const KC={0:'#3a4250',1:'#e8c239',2:'#f0913b',3:'#e5503c',4:'#b3122e',5:'#9b59d0',6:'#5b6ee8',7:'#2fb8a8',8:'#4caf50',9:'#8d6e63',[SPEC_K]:'#ff2fd6'};
+const KL={1:'+s200d10',2:'+s200d12',3:'+s200d14',4:'+s200d16',5:'+s200d18',6:'+s200d20',7:'+s200d22',8:'+s200d25',9:'+s200d28',[SPEC_K]:'СПЕЦ'};
+const LABz=z=>z.k===SPEC_K?'СПЕЦ':'+s'+z.step+'d'+DIAM[z.k];
+const DIAM={1:10,2:12,3:14,4:16,5:18,6:20,7:22,8:25,9:28,[SPEC_K]:0};
+const ABAR={8:0.503,10:0.785,12:1.131,14:1.539,16:2.011,18:2.545,20:3.142,22:3.801,25:4.909,28:6.158}; // площадь стержня, см²
 const BG_DIAMS=[10,12,14,16,18,20,22];       // диаметры, доступные для фоновой (основной) арматуры
 // Фон: диаметр и шаг. Для обычной плиты — один фон (BGd/BGs) на обе грани. Для фундамента (см.
 // IS_FOUNDATION, из C#) — фон верха и низа задаются раздельно (BGdTop/BGdBottom), т.к. у
@@ -218,14 +249,18 @@ const curBGd=()=>IS_FOUNDATION?(CTX.face==='bottom'?BGdBottom:BGdTop):BGd;
 const curBGs=()=>IS_FOUNDATION?(CTX.face==='bottom'?BGsBottom:BGsTop):BGs;
 const capBG=()=>+(ABAR[curBGd()]*1000/curBGs()).toFixed(2);          // несущая способность фона, см²/м
 const STEPS=[100,200];
-const capOf=(k,st)=>k===8?999:+(capBG()+ABAR[DIAM[k]]*1000/st).toFixed(2);
+const capOf=(k,st)=>k===SPEC_K?999:+(capBG()+ABAR[DIAM[k]]*1000/st).toFixed(2);
 // требуется ли допка в ячейке и каким минимальным диаметром (при шаге 200)
 const needAdd=c=>c.a>capBG()+1e-9;
 function needClass(c){if(!needAdd(c))return 0;
-  for(const k of KORD){if(k===8)continue;if(capOf(k,200)>=c.a-1e-9)return k;}return 8;}
-const CAP={0:3.9,1:7.86,2:9.58,3:11.62,4:13.98,5:16.65,6:19.64,7:22.91,8:999}; // при шаге 200
-const KORD=[1,2,3,4,5,6,7,8];
-let LA={10:550,12:660,14:770,16:880,18:990,20:1100,22:1210};        // анкеровка 55d, мм
+  for(const k of curKORD()){if(k===SPEC_K)continue;if(capOf(k,200)>=c.a-1e-9)return k;}return SPEC_K;}
+const CAP={0:3.9,1:7.86,2:9.58,3:11.62,4:13.98,5:16.65,6:19.64,7:22.91,8:28.45,9:34.69,[SPEC_K]:999}; // при шаге 200
+// Диаметры допармирования d10..d22 доступны всегда; d25/d28 — только для фундаментов (там,
+// в отличие от обычных плит, чаще возникает Aₛ, для которой d22 уже не хватает).
+const KORD_BASE=[1,2,3,4,5,6,7];
+const KORD_FOUNDATION_EXTRA=[8,9];
+const curKORD=()=>IS_FOUNDATION?[...KORD_BASE,...KORD_FOUNDATION_EXTRA,SPEC_K]:[...KORD_BASE,SPEC_K];
+let LA={10:550,12:660,14:770,16:880,18:990,20:1100,22:1210,25:1375,28:1540};        // анкеровка 55d, мм
 const LSTD=[1670,1950,2340,2920,3900,4880,5850,6850,7800,8770,9750,11700]; // ряд длин стержней
 const laOf=z=>((LA[DIAM[z.k]]||600)/1000);   // анкеровка, м
 // z.poly — РЕДАКТИРУЕМАЯ рабочая зона (по КЭ).
@@ -243,10 +278,16 @@ function insideMaterial(x,y){
   for(const op of OPENINGS) if(pip(op,x,y)) return false;
   return true;}
 function barBands(z){const la=laOf(z);
-  return bands(z.poly).map(b=>{
-    const midY=(b.y1+b.y2)/2;
-    const edge1=!insideMaterial(b.x1-la,midY);
-    const edge2=!insideMaterial(b.x2+la,midY);
+  // bands() всегда стрипует по «поперёк» (реальный Y) и даёт интервал по «вдоль» (реальный X) —
+  // для dir==='y' стержни идут по Y, поэтому подаём полигон с переставленными x/y (fromReal) и
+  // переставляем обратно (toReal) при сборке итогового прямоугольника полосы.
+  const polyAD=z.poly.map(p=>fromReal(p[0],p[1]));
+  return bands(polyAD).map(b=>{
+    const acrossMid=(b.y1+b.y2)/2;
+    const [chk1x,chk1y]=toReal(b.x1-la,acrossMid);
+    const [chk2x,chk2y]=toReal(b.x2+la,acrossMid);
+    const edge1=!insideMaterial(chk1x,chk1y);
+    const edge2=!insideMaterial(chk2x,chk2y);
     const sides=(edge1?0:1)+(edge2?0:1);
 
     const need=Math.round((b.x2-b.x1)*1000)+sides*Math.round(la*1000);
@@ -255,34 +296,66 @@ function barBands(z){const la=laOf(z);
     const perSide=sides>0?extraTotal/sides:0;   // делится только между сторонами С анкеровкой
 
     const add1=edge1?0:la+perSide, add2=edge2?0:la+perSide;
-    return {x1:b.x1-add1,x2:b.x2+add2,y1:b.y1,y2:b.y2,std:L,need};});}
+    const along1=b.x1-add1, along2=b.x2+add2;
+    const isY=CTX.dir==='y';
+    return isY
+      ?{x1:b.y1,x2:b.y2,y1:along1,y2:along2,std:L,need}
+      :{x1:along1,x2:along2,y1:b.y1,y2:b.y2,std:L,need};});}
 // подбор длины из ряда: нужная длина стержня → ближайшая бо́льшая из ряда
 function stdLen(needMm){for(const L of LSTD)if(L>=needMm-1e-6)return L;return null;}
 // полезная длина зоны при данном диаметре и длине стержня из ряда
 const zoneLenFor=(L,d)=>L-2*(LA[d]||600);
-const DIR='x';           // текущий слой: стержни вдоль X
-const SNAP=0.05;     // 50 мм — вдоль стержней (X): округление длины стержня
-// «Изолинии» (ISO_Y, из Revit — см. BuildIsolines) — привязка границ зоны поперёк стержней
-// к местам, удобным под доп. стержень (середины пролётов осн. арматуры 200мм), а не к
-// произвольному шагу от текущего края зоны. Без изолиний (нет ISO_Y) — прежнее поведение.
-// NB: сейчас жёстко считает Y поперечной осью (см. DIR='x' выше) — для dir==='y' границы
-// зон здесь не привязываются к ISO_X; итоговую позицию стержня в этом случае всё равно
-// поправляет C# (RebarPlacer.PlaceBand → SlabGeometry.NearestIsoline), но сам редактор
-// для dir==='y' пока показывает/сохраняет непривязанные границы — доработать отдельно.
-const nearestIsoY=v=>{
-  if(!ISO_Y.length)return Math.round(v/0.2)*0.2;
-  let best=ISO_Y[0],bd=Math.abs(ISO_Y[0]-v);
-  for(let i=1;i<ISO_Y.length;i++){const d=Math.abs(ISO_Y[i]-v);if(d<bd){bd=d;best=ISO_Y[i];}}
+const SNAP=0.05;     // 50 мм — вдоль стержней: округление длины стержня
+// Какая реальная ось (X/Y) сейчас "вдоль стержней", а какая "поперёк" — зависит от CTX.dir
+// (вкладка Верх/Низ × X/Y): для dir==='x' стержни идут вдоль X, поперёк — Y; для dir==='y' —
+// наоборот. Раньше геометрия зон (округление границ, проверка кратности шагу, анкеровка)
+// везде жёстко считала X вдольной, а Y поперечной осью — на вкладках dir==='y' это давало
+// перевёрнутую (по факту повёрнутую на 90°) рабочую зону. isDirY()/fromReal()/toReal() ниже
+// — общая точка правды для этого сопоставления, используется во всех местах геометрии зон.
+const isDirY=()=>CTX.dir==='y';
+const fromReal=(x,y)=>isDirY()?[y,x]:[x,y];         // реальные (x,y) → [вдоль,поперёк]
+const toReal=(along,across)=>isDirY()?[across,along]:[along,across]; // [вдоль,поперёк] → реальные (x,y)
+// «Изолинии» (ISO_X/ISO_Y, из Revit — см. BuildIsolines) — привязка границ зоны поперёк
+// стержней к местам, удобным под доп. стержень (середины пролётов осн. арматуры 200мм), а не
+// к произвольному шагу от текущего края зоны. Без изолиний нужной оси — прежнее поведение
+// (шаг 200мм от нуля).
+const acrossIso=()=>isDirY()?ISO_X:ISO_Y;
+const nearestIsoAcross=v=>{
+  const arr=acrossIso();
+  if(!arr.length)return Math.round(v/0.2)*0.2;
+  let best=arr[0],bd=Math.abs(arr[0]-v);
+  for(let i=1;i<arr.length;i++){const d=Math.abs(arr[i]-v);if(d<bd){bd=d;best=arr[i];}}
   return best;};
 // Ближайшая изолиния НЕ БЛИЖЕ v: dir<0 — не выше v (для нижней границы), dir>0 — не ниже v
 // (для верхней) — чтобы зона гарантированно перекрывала исходный габарит по ячейкам.
-const outerIsoY=(v,dir)=>{
-  if(!ISO_Y.length)return dir<0?Math.floor(v/0.2)*0.2:Math.ceil(v/0.2)*0.2;
+const outerIsoAcross=(v,dir)=>{
+  const arr=acrossIso();
+  if(!arr.length)return dir<0?Math.floor(v/0.2)*0.2:Math.ceil(v/0.2)*0.2;
   let best=null;
-  for(const y of ISO_Y){
+  for(const y of arr){
     if(dir<0){if(y<=v+1e-6&&(best===null||y>best))best=y;}
     else{if(y>=v-1e-6&&(best===null||y<best))best=y;}}
-  return best!==null?best:(dir<0?ISO_Y[0]:ISO_Y[ISO_Y.length-1]);};
+  return best!==null?best:(dir<0?arr[0]:arr[arr.length-1]);};
+// Свободное округление вдоль стержней (SNAP=50мм): floor/ceil — «наружу», гарантируя, что зона
+// перекрывает исходный габарит; round — для интерактивного позиционирования курсором.
+const alongFloor=v=>Math.round(Math.floor(v/SNAP+1e-6)*SNAP*1000)/1000;
+const alongCeil=v=>Math.round(Math.ceil(v/SNAP-1e-6)*SNAP*1000)/1000;
+const alongRound=v=>Math.round(Math.round(v/SNAP)*SNAP*1000)/1000;
+// Точка под курсором → «правильная» точка зоны: вдоль — свободно (50мм), поперёк — к
+// ближайшей изолинии. Какая из реальных осей вдольная, решает toReal/fromReal (см. выше).
+function snapPoint(wx,wy){
+  const [along,across]=fromReal(wx,wy);
+  const snapped=toReal(alongRound(along),Math.round(nearestIsoAcross(across)*1000)/1000);
+  return snapped;}
+// Округляет прямоугольный габарит зоны в правильные (вдоль/поперёк) границы — см. snapPoint,
+// но «наружу» (floor/ceil), чтобы гарантированно охватить исходные ячейки/зоны.
+function roundZoneRect(b){
+  const [along1,across1]=fromReal(b.x1,b.y1), [along2,across2]=fromReal(b.x2,b.y2);
+  const alo=Math.min(along1,along2),ahi=Math.max(along1,along2);
+  const clo=Math.min(across1,across2),chi=Math.max(across1,across2);
+  const rLo=toReal(alongFloor(alo),Math.round(outerIsoAcross(clo,-1)*1000)/1000);
+  const rHi=toReal(alongCeil(ahi),Math.round(outerIsoAcross(chi,1)*1000)/1000);
+  return {x1:Math.min(rLo[0],rHi[0]),x2:Math.max(rLo[0],rHi[0]),y1:Math.min(rLo[1],rHi[1]),y2:Math.max(rLo[1],rHi[1])};}
 // zones -> polygons (rectilinear, CCW)
 let zones=[];
 // ── генератор зон: классификация → связные области → слияние ≤800 мм → габарит ──
@@ -326,17 +399,23 @@ function generateZones(){
     splitIdx(idx).forEach(part=>comps.push({k:K[i],idx:part}));}
   let zs=comps.map(c=>{const xs=[],ys=[];
     c.idx.forEach(i=>cells[i].p.forEach(p=>{xs.push(p[0]);ys.push(p[1]);}));
-    return {k:c.k,n:c.idx.length,am:+Math.max(...c.idx.map(i=>cells[i].a)).toFixed(2),
-      x1:Math.min(...xs),x2:Math.max(...xs),y1:Math.min(...ys),y2:Math.max(...ys)};});
+    return {x1:Math.min(...xs),x2:Math.max(...xs),y1:Math.min(...ys),y2:Math.max(...ys)};});
   return zs.map((z,i)=>{
-    const x1=Math.round(Math.floor(z.x1/0.05+1e-6)*0.05*1000)/1000,
-          x2=Math.round(Math.ceil(z.x2/0.05-1e-6)*0.05*1000)/1000,
-          y1=Math.round(outerIsoY(z.y1,-1)*1000)/1000,
-          y2=Math.round(outerIsoY(z.y2,1)*1000)/1000;
-    return {id:'d'+DIAM[z.k]+'-'+(i+1),k:z.k,k0:z.k,step:200,avg:false,n:z.n,am:z.am,
+    const poly=rectPoly(z);
+    // rectPoly расширяет габарит кластера наружу (до 50мм вдоль / ближайшей изолинии поперёк) —
+    // в расширенный прямоугольник может попасть соседняя ячейка вне исходного кластера, с более
+    // высоким As, чем предполагала классификация по кластеру. Поэтому диаметр зоны берём не из
+    // кластера, а пересчитываем по ФАКТИЧЕСКИМ ячейкам внутри итогового полигона — точно так же,
+    // как recalcZones делает при переоткрытии окна (см. ниже): иначе только что созданная зона
+    // показывала бы один диаметр, а после переоткрытия — другой, будто он «сам поменялся».
+    const idx=[];cells.forEach((c2,ci)=>{if(pip(poly,c2.x,c2.y))idx.push(ci);});
+    const need=idx.filter(ci=>needAdd(cells[ci]));
+    const am=+Math.max(...need.map(ci=>cells[ci].a)).toFixed(2);
+    const n=need.length,k=classForPeak(am,200);
+    return {id:'d'+DIAM[k]+'-'+(i+1),k,k0:k,step:200,avg:false,n,am,
       state:'pending',edited:false,
-      poly:[[x1,y1],[x2,y1],[x2,y2],[x1,y2]],
-      flags:(z.n===1?['одиночный КЭ — подтвердить осознанно']:[]).concat(z.k===8?['Aₛ выше шкалы — решить конструктивно']:[])};});}
+      poly,
+      flags:(n===1?['одиночный КЭ — подтвердить осознанно']:[]).concat(k===SPEC_K?['Aₛ выше шкалы — решить конструктивно']:[])};});}
 function regenerate(keepManual){
   const manual=keepManual?zones.filter(z=>(z.how==='вручную'||z.how==='копия')&&z.state!=='rejected'):[];
   zones.length=0;generateZones().forEach(z=>zones.push(z));manual.forEach(z=>zones.push(z));
@@ -378,60 +457,21 @@ function resize(){cv.width=cv.clientWidth*dpr;cv.height=cv.clientHeight*dpr;
   if(!fitted){fitted=true;const m=40,w=cv.clientWidth-2*m,h=cv.clientHeight-2*m;
     scale=Math.min(w/(X2-X1),h/(Y2-Y1));ox=m+(w-(X2-X1)*scale)/2-X1*scale;oy=cv.clientHeight-m-(h-(Y2-Y1)*scale)/2+Y1*scale;}
   draw();}
-// ── кратность габарита поперёк стержней (Y) шагу раскладки ──
-function yCheck(z){const ys=[...new Set(z.poly.map(p=>+p[1].toFixed(3)))].sort((a,b)=>a-b);
+// ── кратность габарита поперёк стержней шагу раскладки — поперечная координата (индекс в
+// точке полигона) зависит от CTX.dir: Y для dir==='x', X для dir==='y' ──
+function yCheck(z){const idx=CTX.dir==='y'?0:1;
+  const ys=[...new Set(z.poly.map(p=>+p[idx].toFixed(3)))].sort((a,b)=>a-b);
   const h=Math.round((ys[ys.length-1]-ys[0])*1000);
   const bad100=ys.some(y=>Math.round((y-ys[0])*1000)%100!==0);
   return {h,ok100:!bad100,ok200:h%z.step===0,rem:h%z.step};}
-// ── объединение полигонов (растр + обход границы) ──
-function unionPolys(polys){
-  const b={x1:Math.min(...polys.map(p=>bbox(p).x1)),x2:Math.max(...polys.map(p=>bbox(p).x2)),
-           y1:Math.min(...polys.map(p=>bbox(p).y1)),y2:Math.max(...polys.map(p=>bbox(p).y2))};
-  let r=0.01; while((b.x2-b.x1)/r*((b.y2-b.y1)/r)>1.6e6) r*=2;
-  const W=Math.ceil((b.x2-b.x1)/r)+2, H=Math.ceil((b.y2-b.y1)/r)+2;
-  const gx=i=>b.x1+(i-0.5)*r, gy=j=>b.y1+(j-0.5)*r;
-  const m=new Uint8Array(W*H);
-  for(let j=0;j<H;j++)for(let i=0;i<W;i++){const x=gx(i),y=gy(j);
-    for(const p of polys) if(pip(p,x,y)){m[j*W+i]=1;break;}}
-  // компоненты
-  let comp=0;const lab=new Int32Array(W*H).fill(-1);
-  for(let s0=0;s0<m.length;s0++){if(!m[s0]||lab[s0]>=0)continue;
-    const q=[s0];lab[s0]=comp;
-    while(q.length){const c=q.pop(),ci=c%W,cj=(c-ci)/W;
-      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{const ni=ci+dx,nj=cj+dy;
-        if(ni<0||nj<0||ni>=W||nj>=H)return;const n=nj*W+ni;
-        if(m[n]&&lab[n]<0){lab[n]=comp;q.push(n);}});}
-    comp++;}
-  if(comp!==1)return null;                       // зоны не соприкасаются
-  // граничные рёбра
-  const key=(x,y)=>x+'|'+y, edges=new Map();
-  const add=(x1,y1,x2,y2)=>{const k=key(x1,y1);if(!edges.has(k))edges.set(k,[]);edges.get(k).push([x2,y2]);};
-  for(let j=0;j<H;j++)for(let i=0;i<W;i++){if(!m[j*W+i])continue;
-    const X=b.x1+(i-1)*r,Y=b.y1+(j-1)*r,X2=X+r,Y2=Y+r;
-    if(j===0||!m[(j-1)*W+i]) add(X,Y,X2,Y);
-    if(i===W-1||!m[j*W+i+1]) add(X2,Y,X2,Y2);
-    if(j===H-1||!m[(j+1)*W+i]) add(X2,Y2,X,Y2);
-    if(i===0||!m[j*W+i-1]) add(X,Y2,X,Y);}
-  // обход
-  const start=edges.keys().next().value;let cur=start.split('|').map(Number),out=[cur],guard=0;
-  while(guard++<400000){const k=key(cur[0],cur[1]),lst=edges.get(k);
-    if(!lst||!lst.length)break;const nx=lst.pop();
-    if(Math.abs(nx[0]-start.split('|').map(Number)[0])<1e-9&&Math.abs(nx[1]-start.split('|').map(Number)[1])<1e-9)break;
-    out.push(nx);cur=nx;}
-  // упрощение коллинеарных + округление 10 мм
-  const q=out.map(p=>[Math.round(p[0]/0.05)*0.05,Math.round(p[1]/0.1)*0.1])
-             .map(p=>[Math.round(p[0]*1000)/1000,Math.round(p[1]*1000)/1000]),res=[];
-  for(let i=0;i<q.length;i++){const a=q[(i-1+q.length)%q.length],c=q[i],d=q[(i+1)%q.length];
-    const col=(Math.abs(a[0]-c[0])<1e-9&&Math.abs(c[0]-d[0])<1e-9)||(Math.abs(a[1]-c[1])<1e-9&&Math.abs(c[1]-d[1])<1e-9);
-    if(!col)res.push(c);}
-  return res.length>=4?res:null;}
 // ── статистика по зоне (ячейки внутри полигона) ──
 function zoneStat(z){const idx=[];let sum=0,peak=0;
   cells.forEach((c,i)=>{if(pip(z.poly,c.x,c.y)){idx.push(i);sum+=c.a;if(c.a>peak)peak=c.a;}});
   const mean=idx.length?sum/idx.length:0;
   return {n:idx.length,mean:+mean.toFixed(2),peak:+peak.toFixed(2),idx};}
 function avgCheck(z){const st=zoneStat(z);
-  const cap=capOf(z.k,z.step), capNext=capOf(KORD[KORD.indexOf(z.k)+1]||8,z.step);
+  const kord=curKORD();
+  const cap=capOf(z.k,z.step), capNext=capOf(kord[kord.indexOf(z.k)+1]||SPEC_K,z.step);
   return {st,cap,capNext,meanOk:st.mean<=cap+1e-9,peakOk:st.peak<=capNext+1e-9,
           ok:st.mean<=cap+1e-9};}   // критерий один: среднее ≤ несущей способности
 function reclassCells(){cells.forEach(c=>{c.k=needClass(c);});}
@@ -463,31 +503,27 @@ function recalcZones(){let chg=0,drop=0;
     const need=st.idx.filter(i=>needAdd(cells[i]));      // ячейки, где допка ещё нужна
     if(!need.length){z.state='rejected';z.dropped='фон перекрывает';drop++;return;}
     const basis=z.avg?st.mean:Math.max(...need.map(i=>cells[i].a));
-    let k=8;for(const kk of KORD){if(kk===8)continue;if(capOf(kk,z.step)>=basis-1e-9){k=kk;break;}}
+    let k=SPEC_K;for(const kk of curKORD()){if(kk===SPEC_K)continue;if(capOf(kk,z.step)>=basis-1e-9){k=kk;break;}}
     if(k!==z.k){z.k=k;chg++;}
     z.k0=k;z.am=+Math.max(...need.map(i=>cells[i].a)).toFixed(2);
     z.n=need.length;
     z.flags=z.flags.filter(f=>f.indexOf('одиночный')<0&&f.indexOf('выше шкалы')<0);
     if(need.length===1)z.flags.push('одиночный КЭ — подтвердить осознанно');
-    if(k===8)z.flags.push('Aₛ выше шкалы — решить конструктивно');});
+    if(k===SPEC_K)z.flags.push('Aₛ выше шкалы — решить конструктивно');});
   return {chg,drop};}
-// ── автообъединение пересекающихся зон ──
-let autoNest=true;
+// ── автообъединение пересекающихся зон (всегда включено) ──
 let MFILL=0.55;   // мин. заполнение объединённой зоны
 let MSIDE=4.0;    // макс. сторона объединённой зоны, м
 const insidePoly=(a,b)=>a.every(p=>pip(b,p[0],p[1]));
 function classForMean(mean,step){
-  for(const k of KORD){if(k===8)continue;if(capOf(k,step)>=mean-1e-9)return k;}return 8;}
+  for(const k of curKORD()){if(k===SPEC_K)continue;if(capOf(k,step)>=mean-1e-9)return k;}return SPEC_K;}
 function classForPeak(peak,step){
-  for(const k of KORD){if(k===8)continue;if(capOf(k,step)>=peak-1e-9)return k;}return 8;}
-// расширяем габарит вдоль стержней так, чтобы стержень был из ряда длин
+  for(const k of curKORD()){if(k===SPEC_K)continue;if(capOf(k,step)>=peak-1e-9)return k;}return SPEC_K;}
+// расширяем габарит вдоль стержней так, чтобы стержень был из ряда длин (см. roundZoneRect)
 function rectPoly(b){
-  const x1=Math.round(Math.floor(b.x1/0.05+1e-6)*0.05*1000)/1000,
-        x2=Math.round(Math.ceil(b.x2/0.05-1e-6)*0.05*1000)/1000,
-        y1=Math.round(outerIsoY(b.y1,-1)*1000)/1000,
-        y2=Math.round(outerIsoY(b.y2,1)*1000)/1000;
-  return [[x1,y1],[x2,y1],[x2,y2],[x1,y2]];}
-function absorbNested(silent){if(!autoNest)return 0;let total=0,pass=true;
+  const r=roundZoneRect(b);
+  return [[r.x1,r.y1],[r.x2,r.y1],[r.x2,r.y2],[r.x1,r.y2]];}
+function absorbNested(silent){let total=0,pass=true;
   while(pass){pass=false;
     const act=zones.map((z,i)=>({z,i})).filter(o=>o.z.state!=='rejected'&&o.z.how!=='вручную'&&o.z.how!=='копия');
     outer:
@@ -518,7 +554,7 @@ function absorbNested(silent){if(!autoNest)return 0;let total=0,pass=true;
         n:need.length,am:+peak.toFixed(2),state:'pending',edited:false,
         how:nested?'вложение':'пересечение',absorb:[A.id,B.id],
         poly,flags:(need.length===1?['одиночный КЭ — подтвердить осознанно']:[])
-          .concat(k===8?['Aₛ выше шкалы — решить конструктивно']:[])};
+          .concat(k===SPEC_K?['Aₛ выше шкалы — решить конструктивно']:[])};
       A.state='rejected';A.dropped='объединена';B.state='rejected';B.dropped='объединена';
       zones.push(nz);total++;pass=true;break outer;}}
   if(total&&!silent)toast('Объединено пересекающихся зон: '+total);
@@ -565,8 +601,8 @@ function redo(){if(!REDO.length)return;const cur=REDO.pop();HIST.push({z:snap(),
   restore(cur.z);recompute();sync();updHist();toast('Повторено: '+cur.act);}
 function updHist(){const u=document.getElementById('tUndo'),r=document.getElementById('tRedo');if(!u)return;
   u.disabled=!HIST.length;r.disabled=!REDO.length;
-  u.textContent='↶ Отменить'+(HIST.length?' · '+HIST[HIST.length-1].act:'');
-  r.textContent='↷ Повторить'+(REDO.length?' · '+REDO[REDO.length-1].act:'');}
+  u.textContent='↶ Назад'+(HIST.length?' · '+HIST[HIST.length-1].act:'');
+  r.textContent='↷ Вперёд'+(REDO.length?' · '+REDO[REDO.length-1].act:'');}
 function hotkeys(e){
   const c=e.code;
   if(c==='Escape'&&copyMode){e.preventDefault();e.stopPropagation();cancelCopy();toast('Копирование отменено');return;}
@@ -664,13 +700,13 @@ cv.addEventListener('pointerdown',e=>{
     if(t-lastMid<400){lastMid=0;fitAll();}else{lastMid=t;}
     return;}
   cv.setPointerCapture(e.pointerId);const px=e.offsetX,py=e.offsetY;
-  if(newMode){const x=Math.round(WX(px)/SNAP)*SNAP,y=nearestIsoY(WY(py));
+  if(newMode){const [x,y]=snapPoint(WX(px),WY(py));
     newRect={x1:x,y1:y,x2:x,y2:y};drag={mode:'new'};return;}
   if(copyMode&&copySrc){
     const b=bbox(copySrc.poly),cx=(b.x1+b.x2)/2,cy=(b.y1+b.y2)/2;
-    const tx=Math.round(WX(px)/SNAP)*SNAP,ty=nearestIsoY(WY(py));
+    const [tx,ty]=snapPoint(WX(px),WY(py));
     const dx=tx-cx,dy=ty-cy;
-    const poly=copySrc.poly.map(p=>[Math.round((p[0]+dx)/SNAP)*SNAP,Math.round(nearestIsoY(p[1]+dy)*1000)/1000]);
+    const poly=copySrc.poly.map(p=>snapPoint(p[0]+dx,p[1]+dy));
     push('копия '+copySrc.id);
     const st=zoneStat({poly}),need=st.idx.filter(ix=>needAdd(cells[ix]));
     const nz={id:'d'+DIAM[copySrc.k]+'-C'+zones.length,k:copySrc.k,k0:copySrc.k,step:copySrc.step,avg:copySrc.avg,
@@ -696,13 +732,16 @@ cv.addEventListener('dblclick',e=>{
   if(zi>=0){sel.clear();sel.add(zi);editZ=zi;sync();toast('Режим формы: тяните рёбра.');}});
 cv.addEventListener('pointermove',e=>{const px=e.offsetX,py=e.offsetY;
   document.getElementById('coords').textContent='x '+WX(px).toFixed(2)+' · y '+WY(py).toFixed(2)+' м';
-  if(copyMode&&copySrc){copyPt=[Math.round(WX(px)/SNAP)*SNAP,nearestIsoY(WY(py))];cv.style.cursor='crosshair';draw();return;}
-  if(drag&&drag.mode==='new'){newRect.x2=Math.round(WX(px)/SNAP)*SNAP;
-    newRect.y2=nearestIsoY(WY(py));draw();return;}
+  if(copyMode&&copySrc){copyPt=snapPoint(WX(px),WY(py));cv.style.cursor='crosshair';draw();return;}
+  if(drag&&drag.mode==='new'){const [x,y]=snapPoint(WX(px),WY(py));
+    newRect.x2=x;newRect.y2=y;draw();return;}
   if(drag&&drag.mode==='edge'){const z=zones[editZ],eg=drag.e,p=z.poly;
     const i1=eg.i,i2=(eg.i+1)%p.length;
-    if(eg.vert){const v=Math.round(WX(px)/SNAP)*SNAP;p[i1][0]=v;p[i2][0]=v;}
-    else{const v=Math.round(nearestIsoY(WY(py))*1000)/1000;p[i1][1]=v;p[i2][1]=v;}
+    // Перетаскивание вертикального ребра меняет X, горизонтального — Y; какое из них «вдоль»
+    // (свободный SNAP), а какое «поперёк» (к изолинии) — зависит от CTX.dir (см. isDirY).
+    const isY=CTX.dir==='y';
+    if(eg.vert){const v=isY?Math.round(nearestIsoAcross(WX(px))*1000)/1000:alongRound(WX(px));p[i1][0]=v;p[i2][0]=v;}
+    else{const v=isY?alongRound(WY(py)):Math.round(nearestIsoAcross(WY(py))*1000)/1000;p[i1][1]=v;p[i2][1]=v;}
     z.edited=true;z.placed=false;if(z.state==='accepted')z.state='pending';
     recompute();renderCard();renderList();draw();return;}
   if(drag&&(drag.mode==='pan'||drag.mode==='maybe')){
@@ -748,7 +787,6 @@ function zoomStep(){
   else zoomRAF=requestAnimationFrame(zoomStep);
   if(anchor){ox=anchor.px-anchor.wx*scale;oy=anchor.py+anchor.wy*scale;}
   draw();}
-function unstep(z){const b=bbox(z.poly);z.poly=[[b.x1,b.y1],[b.x2,b.y1],[b.x2,b.y2],[b.x1,b.y2]];z.edited=true;z.placed=false;}
 // ── draw ──
 let showAnchor=true,showIso=true,valMode='auto';
 function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWidth,cv.clientHeight);
@@ -771,13 +809,13 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
   // фон: контур плиты
   if(FLOOR_OUTLINE.length>1){ctx.beginPath();
     FLOOR_OUTLINE.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
-    ctx.closePath();ctx.setLineDash([9,5]);ctx.lineWidth=1.6;
-    ctx.strokeStyle='#3ecf8e';ctx.globalAlpha=.7;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);}
+    ctx.closePath();ctx.setLineDash([]);ctx.lineWidth=2.6;
+    ctx.strokeStyle='#3ecf8e';ctx.globalAlpha=.85;ctx.stroke();ctx.globalAlpha=1;}
   // фон: крупные проёмы (≥1000×1000мм) — через них анкеровка не строится, см. insideMaterial
   OPENINGS.forEach(op=>{if(op.length<2)return;ctx.beginPath();
     op.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
-    ctx.closePath();ctx.setLineDash([9,5]);ctx.lineWidth=1.6;
-    ctx.strokeStyle='#ff8a3e';ctx.globalAlpha=.7;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);});
+    ctx.closePath();ctx.setLineDash([]);ctx.lineWidth=2.6;
+    ctx.strokeStyle='#ff8a3e';ctx.globalAlpha=.85;ctx.stroke();ctx.globalAlpha=1;});
   cells.forEach((c,i)=>{ctx.beginPath();c.p.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
     ctx.closePath();ctx.fillStyle=KC[c.k]||'#555';ctx.globalAlpha=c.k?0.85:0.5;ctx.fill();ctx.globalAlpha=1;
     if(uncovered.has(i)){
@@ -862,7 +900,7 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
 // ── UI ──
 function renderLegend(){
   const act=zones.filter(z=>z.state!=='rejected');
-  const rows=KORD.map(k=>{const n=act.filter(z=>z.k===k).length;
+  const rows=curKORD().map(k=>{const n=act.filter(z=>z.k===k).length;
     return '<div class="row"'+(n?'':' style="opacity:.35"')+'><span class="chip" style="background:'+KC[k]+'"></span>'+
       KL[k]+' · '+n+'</div>';}).join('');
   document.getElementById('legend').innerHTML=
@@ -922,12 +960,42 @@ function regenerateBackground(faceFilter){
     document.getElementById('bgFound').style.display=IS_FOUNDATION?'':'none';
     dBot.value=BGdBottom;sBot.value=BGsBottom;dTop.value=BGdTop;sTop.value=BGsTop;
     updBot();updTop();
+    // Диаметры допармирования (d25/d28) для фундаментов известны только теперь — перерисовываем
+    // кнопки выбора диаметра новой зоны, см. renderNewDiamBtns (function-декларация, поднята
+    // над этим вызовом независимо от порядка в файле).
+    renderNewDiamBtns();
   };
   upd();updBot();updTop();
 })();
-(function(){const t=document.getElementById('latab');
+// Коэффициент анкеровки (по умолчанию 55, т.е. lₐ=55d) — настраиваемый: смена коэффициента
+// пересчитывает длины ВСЕХ диаметров сразу (включая ранее исправленные вручную построчно —
+// «автоматически пересчитается» имеется в виду буквально), а построчные поля под таблицей
+// позволяют дальше поправить длину для отдельного диаметра независимо от коэффициента.
+let LA_COEF=55;
+// Отправляет текущие LA_COEF/LA в C# на сохранение в проект (см. RebarZonesWindow "anchorset:"
+// / RebarZonesDataStore.SaveAnchorSettingsJson) — общие на весь проект, не на плиту, поэтому
+// восстанавливаются из payload.anchor при КАЖДОМ открытии окна (см. loadState), а не только
+// для текущей плиты.
+function saveAnchorSettings(){
+  if(window.chrome&&window.chrome.webview){
+    window.chrome.webview.postMessage('anchorset:'+JSON.stringify({coef:LA_COEF,la:LA}));
+  }
+}
+function renderLaTable(){
+  const t=document.getElementById('latab');
   t.innerHTML=Object.entries(LA).map(([d,v])=>'<tr><td>⌀'+d+'</td><td><input data-d="'+d+'" value="'+v+'"></td></tr>').join('');
-  t.querySelectorAll('input').forEach(i=>i.onchange=()=>{LA[i.dataset.d]=+i.value||400;draw();});})();
+  t.querySelectorAll('input').forEach(i=>i.onchange=()=>{LA[i.dataset.d]=+i.value||400;saveAnchorSettings();draw();});
+}
+renderLaTable();
+document.getElementById('laCoef').onchange=e=>{
+  const c=+e.target.value;
+  if(!c||c<=0){e.target.value=LA_COEF;return;}
+  LA_COEF=c;
+  Object.keys(LA).forEach(d=>{LA[d]=Math.round(LA_COEF*d);});
+  renderLaTable();
+  saveAnchorSettings();
+  draw();
+};
 let filt=0;
 function renderFilter(){const el=document.getElementById('zfilter');
   el.innerHTML=[0,1,2,3,4,5,8].map(k=>'<button class="fbtn'+(filt===k?' on':'')+'" data-k="'+k+'">'+(k?KL[k]:'все')+'</button>').join('');
@@ -967,7 +1035,7 @@ function renderCard(){const el=document.getElementById('zcard');
   if(!sel.size){el.innerHTML='<div class="hint">Клик — выбрать зону. Двойной клик — редактировать форму: тянуть рёбра (50 мм вдоль, 100 мм поперёк). Ctrl+клик — несколько зон. Ctrl+Z — отменить, Ctrl+Y — повторить, Del — удалить выбранную зону(ы).</div>';return;}
   if(sel.size>1){
     el.innerHTML='<div class="t"><b>'+sel.size+' зон выбрано</b></div>'
-      +'<div class="hint">«Слить выбранные» — общий габарит, класс по старшему. Del — удалить все выбранные.</div>'
+      +'<div class="hint">«Объединить зоны» — общий габарит, класс по старшему. Del — удалить все выбранные.</div>'
       +'<div id="zbtns"><button class="acc" id="bAccMulti">✓ Принять все ('+sel.size+')</button>'
       +'<button class="rej" id="bRejMulti">✕ Отклонить все ('+sel.size+')</button>'
       +'<button class="del" id="bDelMulti">🗑 Удалить все ('+sel.size+')</button></div>';
@@ -988,8 +1056,8 @@ function renderCard(){const el=document.getElementById('zcard');
   '<span>Aₛ max</span><i>'+z.am+' см²/м</i>'+
   '<span>Тип</span><i style="font-size:10px">плита_доп_'+(CTX.face==='bottom'?'Н':'В')+CTX.dir+'_d='+DIAM[z.k]+'_А500</i>'+
   '<span>Анкеровка</span><i>‖'+CTX.dir.toUpperCase()+', lₐ '+(LA[DIAM[z.k]]||'—')+' мм</i></div>'+
-  '<div class="ksel">'+KORD.map(k=>'<button class="kb'+(z.k===k?' on':'')+'" data-k="'+k+'" style="--kc:'+KC[k]+'">'+(k===8?'СПЕЦ':'d'+DIAM[k])+'</button>').join('')+
-    (z.k!==z.k0?'<span class="ovr">изменён вручную (расчёт: '+(z.k0===8?'СПЕЦ':'d'+DIAM[z.k0])+')</span>':'')+'</div>'+
+  '<div class="ksel">'+curKORD().map(k=>'<button class="kb'+(z.k===k?' on':'')+'" data-k="'+k+'" style="--kc:'+KC[k]+'">'+(k===SPEC_K?'СПЕЦ':'d'+DIAM[k])+'</button>').join('')+
+    (z.k!==z.k0?'<span class="ovr">изменён вручную (расчёт: '+(z.k0===SPEC_K?'СПЕЦ':'d'+DIAM[z.k0])+')</span>':'')+'</div>'+
   (()=>{const d=DIAM[z.k];if(!d)return '';const la=LA[d]||600,bb2=barBands(z);
      if(bb2.some(b=>!b.std))
        return '<div class="ycheck warn">⚠ требуется стержень '+Math.max(...bb2.map(b=>b.need))+
@@ -1043,50 +1111,45 @@ function renderContourWarn(){
   el.style.display='block';
   el.textContent='⚠ Контур плиты (Revit) и мозаика DXF на этой вкладке отличаются на '+mism+'% — проверьте, тот ли файл выбран';
 }
-document.getElementById('ebRect').onclick=()=>{if(editZ<0)return;push('возврат к прямоугольнику '+zones[editZ].id);unstep(zones[editZ]);recompute();sync();};
 document.getElementById('ebDone').onclick=()=>{editZ=-1;sync();};
-function doMerge(mode){push('слияние '+sel.size+' зон');const ids=[...sel],zs=ids.map(i=>zones[i]);
+function doMerge(){push('слияние '+sel.size+' зон');const ids=[...sel],zs=ids.map(i=>zones[i]);
   const bs=zs.map(z=>bbox(z.poly)),k=Math.max(...zs.map(z=>z.k));
   const x1=Math.min(...bs.map(b=>b.x1)),x2=Math.max(...bs.map(b=>b.x2)),y1=Math.min(...bs.map(b=>b.y1)),y2=Math.max(...bs.map(b=>b.y2));
-  let poly=null,how='габарит';
-  if(mode!=='bbox'){poly=unionPolys(zs.map(z=>z.poly));if(poly)how='контур';}
-  if(!poly){const yy=Math.round((y1+Math.ceil(((y2-y1)-1e-6)/0.2)*0.2)*1000)/1000,
-      xa=Math.round(Math.floor(x1/0.05+1e-6)*0.05*1000)/1000,
-      xb=Math.round(Math.ceil(x2/0.05-1e-6)*0.05*1000)/1000;
-    poly=[[xa,y1],[xb,y1],[xb,yy],[xa,yy]];}
+  const poly=rectPoly({x1,x2,y1,y2});
   const nz={id:'d'+DIAM[k]+'-M'+zones.length,k,k0:k,step:Math.min(...zs.map(z=>z.step)),avg:false,n:zs.reduce((s,z)=>s+z.n,0),am:Math.max(...zs.map(z=>z.am)),
-    state:'pending',edited:true,flags:[],poly,how};
+    state:'pending',edited:true,flags:[],poly,how:'габарит'};
   ids.forEach(i=>zones[i].state='rejected');zones.push(nz);sel.clear();sel.add(zones.length-1);
   absorbNested(true);recompute();
-  const c=avgCheck(nz),low=KORD[KORD.indexOf(k)-1];
+  const c=avgCheck(nz),kordM=curKORD(),low=kordM[kordM.indexOf(k)-1];
   if(low&&c.st.mean<=CAP[low]){nz.hintLow=low;}
   sync();
   toast('Слито в '+nz.id+' · класс по старшему: '+KL[k]+
     (nz.hintLow?' · среднее '+c.st.mean+' → можно понизить до '+KL[nz.hintLow]:''));}
-document.getElementById('tMergeB').onclick=()=>{if(sel.size>=2)doMerge('bbox');};
-document.getElementById('tAcceptAll').onclick=()=>{push('принять все без флагов');let n=0;zones.forEach(z=>{if(z.state==='pending'&&!z.flags.length){z.state='accepted';n++;}});
+document.getElementById('tMergeB').onclick=()=>{if(sel.size>=2)doMerge();};
+document.getElementById('tAcceptAll').onclick=()=>{push('принять всё');let n=0;zones.forEach(z=>{if(z.state==='pending'&&!z.flags.length){z.state='accepted';n++;}});
   recompute();sync();toast('Принято зон: '+n+'. Остались зоны с флагами.');};
 document.getElementById('tAnchor').onclick=function(){showAnchor=!showAnchor;this.classList.toggle('on',showAnchor);
   this.textContent='⌐ Габарит с анкеровкой — '+(showAnchor?'вкл':'выкл');draw();};
 document.getElementById('tIso').onclick=function(){showIso=!showIso;this.classList.toggle('on',showIso);
-  this.textContent='▦ Изолинии допармирования — '+(showIso?'вкл':'выкл');draw();};
+  this.textContent='▦ Изолинии доп. армирования — '+(showIso?'вкл':'выкл');draw();};
 document.getElementById('tValues').onclick=function(){valMode=valMode==='auto'?'on':valMode==='on'?'off':'auto';
-  this.textContent='№ Значения Aₛ — '+{auto:'авто',on:'вкл',off:'выкл'}[valMode];draw();};
+  this.textContent='Значение A — '+{auto:'авто',on:'вкл',off:'выкл'}[valMode];draw();};
 function setNewBtn(){const b=document.getElementById('tNew');
   b.classList.toggle('on',newMode||pickingDiam);
   b.textContent=newMode?'✚ Растяните рамку на карте…':(pickingDiam?'✚ Выберите диаметр ниже…':'✚ Новая зона (рамкой)');
   cv.style.cursor=newMode?'crosshair':'grab';
   document.getElementById('newDiamPick').style.display=pickingDiam?'block':'none';}
-(function(){
+// Кнопки выбора диаметра для новой зоны — список зависит от IS_FOUNDATION (см. curKORD),
+// который становится известен только из loadState(), уже после первого вызова этой функции —
+// поэтому она вызывается повторно из applyFoundationUI().
+function renderNewDiamBtns(){
   const el=document.getElementById('newDiamBtns');
-  el.innerHTML=KORD.map(k=>'<button class="kb" data-k="'+k+'" style="--kc:'+KC[k]+'">'+(k===8?'СПЕЦ':'d'+DIAM[k])+'</button>').join('');
+  el.innerHTML=curKORD().map(k=>'<button class="kb" data-k="'+k+'" style="--kc:'+KC[k]+'">'+(k===SPEC_K?'СПЕЦ':'d'+DIAM[k])+'</button>').join('');
   el.querySelectorAll('.kb').forEach(b=>b.onclick=()=>{
     newDiam=+b.dataset.k;pickingDiam=false;newMode=true;setNewBtn();
   });
-})();
-document.getElementById('tNest').onclick=function(){autoNest=!autoNest;this.classList.toggle('on',autoNest);
-  this.textContent='⊂ Объединять пересекающиеся — '+(autoNest?'вкл':'выкл');
-  if(autoNest){push('объединение пересекающихся');absorbNested();recompute();sync();}};
+}
+renderNewDiamBtns();
 document.getElementById('tUndo').onclick=undo;
 document.getElementById('tRedo').onclick=redo;
 document.getElementById('tNew').onclick=()=>{
@@ -1123,7 +1186,10 @@ document.getElementById('place').onclick=()=>{
   // направление у C# больше не единственные на всё окно, шлём явно с каждым размещением).
   const accepted=toSend.map(z=>({
     id:z.id,k:z.k,d:DIAM[z.k],step:z.step,avg:z.avg,am:z.am,how:z.how||'расчёт',poly:z.poly,bgD:curBGd()}));
-  const msg={face:CTX.face,dir:CTX.dir,zones:accepted};
+  // la — текущая (возможно, настроенная в "Настройках") длина анкеровки по диаметрам: без её
+  // передачи размещение в Revit использовало бы зашитые по умолчанию 55d, игнорируя то, что
+  // показывает и запоминает редактор (см. RebarZonesWindow.PlaceZones).
+  const msg={face:CTX.face,dir:CTX.dir,zones:accepted,la:LA};
   if(window.chrome&&window.chrome.webview){
     window.chrome.webview.postMessage('place:'+JSON.stringify(msg));
   }else{
@@ -1141,6 +1207,44 @@ document.getElementById('loadDxf').onclick=()=>{
   }else{
     toast('Демо (нет связи с Revit): выбор DXF недоступен вне Revit');
   }
+};
+// Свой ввод пароля вместо prompt(): prompt() показывает набираемый текст открытым текстом
+// (можно подсмотреть/скопировать) — этот пароль сам по себе не настоящая защита (виден в
+// исходнике страницы), но маскировка звёздочками (input type=password) не даёт его списать
+// взглядом с экрана или скопировать выделением, пока кто-то другой его вводит.
+function askPassword(){
+  const ov=document.getElementById('pwOverlay'),inp=document.getElementById('pwInput'),
+        ok=document.getElementById('pwOk'),cancel=document.getElementById('pwCancel');
+  inp.value='';ov.classList.add('on');inp.focus();
+  return new Promise(resolve=>{
+    const close=v=>{ov.classList.remove('on');ok.onclick=null;cancel.onclick=null;inp.onkeydown=null;resolve(v);};
+    ok.onclick=()=>close(inp.value);
+    cancel.onclick=()=>close(null);
+    inp.onkeydown=e=>{if(e.key==='Enter')close(inp.value);else if(e.key==='Escape')close(null);};
+  });
+}
+// Снимает отметки «уже размещено» у зон ТЕКУЩЕЙ вкладки (и в этом сеансе, и в персистентной
+// истории на диске — см. RebarZonesWindow.OnWebMessage "resetplaced:") — на случай, если
+// реальную арматуру в Revit удалили вручную мимо плагина, и он должен перестать её "помнить".
+document.getElementById('tResetPlaced').onclick=async()=>{
+  if(!ACTIVE_KEY)return;
+  const err=document.getElementById('pwErr');err.textContent='';
+  let pass=await askPassword();
+  while(pass!==null&&pass!=='31415PIE'){
+    err.textContent='Неверный пароль';
+    pass=await askPassword();
+  }
+  err.textContent='';
+  if(pass===null)return;
+  const label=tabLabel(DATASETS[ACTIVE_KEY].face,DATASETS[ACTIVE_KEY].dir);
+  if(!confirm('Сбросить память размещения для вкладки «'+label+'»?\nОтметки «уже размещено» будут сняты у всех зон вкладки. Уже созданную в Revit арматуру это НЕ удаляет.'))return;
+  push('сброс памяти размещения');
+  zones.forEach(z=>z.placed=false);
+  recompute();sync();
+  if(window.chrome&&window.chrome.webview){
+    window.chrome.webview.postMessage('resetplaced:'+ACTIVE_KEY);
+  }
+  toast('Память размещения вкладки «'+label+'» сброшена');
 };
 // Вызывается из C# (RebarZonesWindow.SendAddDataset) после выбора DXF через кнопку "📁 DXF" —
 // добавляет/заменяет ТОЛЬКО перечисленные вкладки, не трогая уже открытые/отредактированные
@@ -1178,7 +1282,7 @@ function buildWarnings(){const rows=[];zones.forEach((z,i)=>{if(z.state==='rejec
       if(!stdLen(need))rows.push({t:'w-len',tag:'длина',
         txt:z.id+' — стержень '+need+' мм длиннее максимальной 11700. Разделите зону или предусмотрите стык.',zi:i});})();
     if(z.n===1)rows.push({t:'w-single',tag:'пик',txt:z.id+' — одиночный КЭ, Aₛ '+z.am+'. Влить в соседнюю или подтвердить.',zi:i});
-    if(z.k===8)rows.push({t:'w-spec',tag:'шкала',txt:z.id+' — Aₛ на максимуме шкалы (24). Решить конструктивно.',zi:i});});
+    if(z.k===SPEC_K)rows.push({t:'w-spec',tag:'шкала',txt:z.id+' — Aₛ на максимуме шкалы (24). Решить конструктивно.',zi:i});});
   document.getElementById('wcnt').textContent=rows.length;
   const wl=document.getElementById('warnlist');
   wl.innerHTML=rows.map(r=>'<div class="wrow" data-z="'+r.zi+'"><span class="wtag '+r.t+'">'+r.tag+'</span><span class="d">'+r.txt+'</span></div>').join('');
@@ -1295,6 +1399,17 @@ window.loadState=function(json){
   if(IS_FOUNDATION){BGdTop=20;BGdBottom=20;}
   if(window.applyFoundationUI)applyFoundationUI();
   CONTOUR_MISMATCH=payload.contourMismatch||{};
+
+  // Настроенная анкеровка из прошлого сеанса (общая на весь проект, не на эту плиту — см.
+  // RebarZonesDataStore.LoadAnchorSettingsJson) — коэффициент и/или построчно исправленные
+  // длины поверх дефолтных 55d. renderLaTable уже вызывался один раз при загрузке страницы
+  // (до loadState), здесь перерисовываем под восстановленные значения.
+  if(payload.anchor){
+    if(payload.anchor.coef)LA_COEF=payload.anchor.coef;
+    if(payload.anchor.la)Object.assign(LA,payload.anchor.la);
+    document.getElementById('laCoef').value=LA_COEF;
+    renderLaTable();
+  }
 
   const placedHistory=payload.placed||{};
   const savedZones=payload.savedZones||{};

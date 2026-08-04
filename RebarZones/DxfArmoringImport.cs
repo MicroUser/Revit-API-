@@ -280,8 +280,12 @@ namespace DAN_Plugin
     // ─────────────────────────────────────────────────────────────────────────
     // Диагностика: выбрать DXF → показать статистику разбора (без записи в документ).
     // Как и остальные команды в Debug.cs — не подключена к ленте, запуск через Add-In Manager.
+    // Manual, а не ReadOnly (хотя команда и не пишет в документ): Add-in Manager сверяет
+    // TransactionMode по всей сборке разом, а весь остальной код в проекте — Manual; одинокий
+    // ReadOnly здесь ломал запуск ЛЮБОЙ команды из DLL через Add-in Manager ("...are not the
+    // same as the mode set to Add-In Manager").
     // ─────────────────────────────────────────────────────────────────────────
-    [Autodesk.Revit.Attributes.Transaction(Autodesk.Revit.Attributes.TransactionMode.ReadOnly)]
+    [Autodesk.Revit.Attributes.Transaction(Autodesk.Revit.Attributes.TransactionMode.Manual)]
     public class ImportDxfArmoringTest : Autodesk.Revit.UI.IExternalCommand
     {
         public Autodesk.Revit.UI.Result Execute(

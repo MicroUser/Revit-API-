@@ -127,6 +127,38 @@ namespace LiraToRevit.Rebar
             if (msg == null) return;
             if (msg.StartsWith("place:")) { PlaceZones(msg.Substring("place:".Length)); return; }
             if (msg.StartsWith("loaddxf:")) { LoadDxfRequested(msg.Substring("loaddxf:".Length)); return; }
+            if (msg.StartsWith("resetplaced:")) { ResetPlaced(msg.Substring("resetplaced:".Length)); return; }
+            if (msg.StartsWith("anchorset:")) { AnchorSettingsChanged(msg.Substring("anchorset:".Length)); return; }
+        }
+
+        /// <summary>Коэффициент/построчные длины анкеровки поправлены в окне "Настройки" (см.
+        /// rebar_zones.html LA_COEF/LA, laCoef/renderLaTable) — сохраняем как есть, C# их не
+        /// разбирает (см. RebarZonesDataStore.SaveAnchorSettingsJson), чтобы при следующем
+        /// открытии редактор восстановил именно то, что было. Отдельно от этого при КАЖДОМ
+        /// размещении текущие значения LA шлются вместе с "place:" и применяются к
+        /// PlacementSettings.Anchorage — см. PlaceZones — иначе созданная в Revit арматура
+        /// продолжала бы использовать зашитые по умолчанию 55d независимо от этих настроек.</summary>
+        private void AnchorSettingsChanged(string rawJson)
+        {
+            if (string.IsNullOrEmpty(rawJson)) return;
+            _bridge.Run(app => RebarZonesDataStore.SaveAnchorSettingsJson(app.ActiveUIDocument.Document, rawJson));
+        }
+
+        /// <summary>Кнопка "Сбросить память размещения" (окно настроек, за паролем в JS) —
+        /// снимает пометку "уже размещено" для одной вкладки (comboKey приходит как есть,
+        /// см. rebar_zones.html tResetPlaced). Сама JS-сторона уже сбросила z.placed у себя
+        /// оптимистично, эта часть только чистит персистентную историю на диске, чтобы она не
+        /// вернулась при следующем открытии окна (см. RebarZonesDataStore.ClearPlaced).</summary>
+        private void ResetPlaced(string comboKey)
+        {
+            if (string.IsNullOrEmpty(comboKey)) return;
+            _bridge.Run(app =>
+            {
+                var doc = app.ActiveUIDocument.Document;
+                var floor = doc.GetElement(_floorId) as Floor;
+                if (floor == null) return;
+                RebarZonesDataStore.ClearPlaced(doc, floor, comboKey);
+            });
         }
 
         /// <summary>
@@ -196,18 +228,34 @@ namespace LiraToRevit.Rebar
         {
             List<JsZone> jsZones;
             Face face; Dir dir;
+            Dictionary<int, double> anchorOverride = null;
             try
             {
-                // Сообщение — {"face":"top"|"bottom","dir":"x"|"y","zones":[...]}: грань/направление
-                // берём из САМОГО сообщения (текущая вкладка редактора на момент клика), а не из
-                // initJson окна — при нескольких загруженных DXF на плиту (см. RebarZonesCommand)
-                // окно уже не привязано к одной-единственной комбинации грань+направление.
+                // Сообщение — {"face":"top"|"bottom","dir":"x"|"y","zones":[...],"la":{...}}:
+                // грань/направление берём из САМОГО сообщения (текущая вкладка редактора на момент
+                // клика), а не из initJson окна — при нескольких загруженных DXF на плиту (см.
+                // RebarZonesCommand) окно уже не привязано к одной-единственной комбинации
+                // грань+направление.
                 using (var doc = System.Text.Json.JsonDocument.Parse(payloadJson))
                 {
                     var root = doc.RootElement;
                     face = root.GetProperty("face").GetString() == "bottom" ? Face.Bottom : Face.Top;
                     dir = root.GetProperty("dir").GetString() == "y" ? Dir.Y : Dir.X;
                     jsZones = JsZone.ParseArray(root.GetProperty("zones"));
+
+                    // Текущая (возможно, настроенная пользователем — см. AnchorSettingsChanged)
+                    // длина анкеровки по диаметрам: применяется к PlacementSettings.Anchorage ниже,
+                    // иначе созданная в Revit арматура использовала бы зашитые по умолчанию 55d
+                    // независимо от того, что показывает и сохраняет редактор.
+                    if (root.TryGetProperty("la", out var laEl) && laEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        anchorOverride = new Dictionary<int, double>();
+                        foreach (var prop in laEl.EnumerateObject())
+                        {
+                            if (int.TryParse(prop.Name, out int d) && prop.Value.TryGetDouble(out double v))
+                                anchorOverride[d] = v;
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -279,6 +327,11 @@ namespace LiraToRevit.Rebar
                         // Диаметр фоновой (основной) арматуры — из HTML (одно значение на всю
                         // партию зон в этом клике), а не жёстко зашитое значение по умолчанию.
                         settings.FirstLayerThickness = freshJs[0].BgD;
+                        // Настроенная пользователем анкеровка (окно "Настройки" → laCoef/latab) —
+                        // без этого созданная арматура игнорировала бы её и анкеровалась по
+                        // зашитым по умолчанию 55d, хотя редактор уже показывает другие значения.
+                        if (anchorOverride != null)
+                            foreach (var kv in anchorOverride) settings.Anchorage[kv.Key] = kv.Value;
                         if (isFoundation)
                         {
                             settings.TypeNameTemplate = "(арматура)фундамент_доп_{F}{D}_d={d}_А500";

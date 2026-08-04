@@ -12,6 +12,16 @@ namespace MyPlugin.Loader
     {
         internal static string PluginDir;
 
+        // Название вкладки ленты Revit — "DAN" по умолчанию. Сборка с constant LD_BRAND (см.
+        // Loader.csproj/Loader2026.csproj, конфигурация Release-LD, и
+        // Installer/DAN_Plugin_Combined_LD.iss) показывает "LD" вместо этого — та же сборка,
+        // тот же путь установки/manifest/DAN_Plugin.dll, меняется только этот видимый ярлык.
+#if LD_BRAND
+        private const string RibbonTabName = "LD";
+#else
+        private const string RibbonTabName = "DAN";
+#endif
+
         public Result OnStartup(UIControlledApplication a)
         {
             PluginDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
@@ -24,9 +34,9 @@ namespace MyPlugin.Loader
 
         private static void SetupRibbon(UIControlledApplication a)
         {
-            try { a.CreateRibbonTab("DAN"); } catch { }
+            try { a.CreateRibbonTab(RibbonTabName); } catch { }
 
-            RibbonPanel panel = a.CreateRibbonPanel("DAN", "КЖ");
+            RibbonPanel panel = a.CreateRibbonPanel(RibbonTabName, "КЖ");
             string path = Assembly.GetExecutingAssembly().Location;
 
             var btnSchedule = (PushButton)panel.AddItem(new PushButtonData(
@@ -42,7 +52,7 @@ namespace MyPlugin.Loader
             // Допармирование плит (импорт DXF мозаики ЛИРА → зоны → арматура) + Аннотация доп.арм
             // — стакованная пара (одна колонка): сначала размещают допку, потом её аннотируют.
             var stackSlabRebar = panel.AddStackedItems(
-                new PushButtonData("RebarZonesCommand", "Допармирование\nплит", path,
+                new PushButtonData("RebarZonesCommand", "Доп. армирование плит", path,
                     "MyPlugin.Loader.ProxyRebarZonesCommand")
                 { LongDescription = "Импорт DXF мозаики армирования ЛИРА, подтверждение зон в редакторе и размещение дополнительной арматуры плит/фундаментов." },
                 new PushButtonData("CreateRebarAnnotation", "Аннотация\nдоп.арм", path,
@@ -51,6 +61,7 @@ namespace MyPlugin.Loader
             var btnRebarZones = (PushButton)stackSlabRebar[0];
             btnRebarZones.LargeImage = LoadIcon("steel-mesh_32.png");
             btnRebarZones.Image      = LoadIcon("steel-mesh_16.png");
+            btnRebarZones.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/jdluFJ9SjIM"));
             var btnAnnot = (PushButton)stackSlabRebar[1];
             btnAnnot.LargeImage = LoadIcon("slab_32.png");
             btnAnnot.Image      = LoadIcon("slab_16.png");
