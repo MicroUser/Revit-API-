@@ -1,0 +1,42 @@
+<Window x:Class="LiraDxfExporter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LiraDxfExporter — экспорт мозаики армирования из ЛИРА-САПР"
+        Height="560" Width="820"
+        Background="#14171C">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Foreground="#DDE4EC" FontSize="15" FontWeight="Bold"
+                   Text="Экспорт мозаики армирования (4 комбинации: Верх/Низ × X1/Y1)" Margin="0,0,0,4"/>
+        <TextBlock Grid.Row="1" Foreground="#8B96A5" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Text="Требуется запущенный LiraSapr.exe с открытым документом и уже вручную выбранными КЭ этажа. Файлы получат имена «отметка_В|Н_X|Y.dxf»."/>
+
+        <Grid Grid.Row="2" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtFolder" Grid.Column="0" Padding="8" FontFamily="Consolas" FontSize="12"
+                     Background="#1B2027" Foreground="#DDE4EC" BorderBrush="#2C343F" VerticalContentAlignment="Center"/>
+            <Button x:Name="BtnBrowse" Grid.Column="1" Content="Обзор..." Padding="12,8" Margin="8,0,0,0"
+                    Click="BtnBrowse_Click"/>
+        </Grid>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,12">
+            <Button x:Name="BtnExportAll" Content="Начать экспорт (4 комбинации)" Padding="16,8"
+                    FontWeight="Bold" Click="BtnExportAll_Click"/>
+        </StackPanel>
+
+        <TextBox Grid.Row="4" x:Name="TxtLog" IsReadOnly="True" TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Consolas" FontSize="12"
+                 Background="#1B2027" Foreground="#DDE4EC" BorderBrush="#2C343F" Padding="10"/>
+    </Grid>
+</Window>

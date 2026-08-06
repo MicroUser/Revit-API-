@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Отдельная, НЕ зависящая от Revit утилита — автоматизирует повторяющийся экспорт мозаики
+       армирования из ЛИРА-САПР (LiraSapr.exe) через UI Automation (клики по ленте у него не
+       порождают WM_COMMAND — проверено вживую через Spy++), затем сразу чистит и переименовывает
+       результат через уже готовый DxfCleaner (см. ProjectReference ниже). Не входит в
+       DAN_Plugin.sln — собирается отдельно через dotnet build/publish, как и DxfCleaner. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms> <!-- для FolderBrowserDialog (выбор папки назначения) -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>LiraDxfExporter</RootNamespace>
+    <AssemblyName>LiraDxfExporter</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- CA1416: анализатор не видит платформенный минимум для net8.0-windows без суффикса версии
+         (например "windows10.0.19041.0") — все API здесь реально доступны, ложные срабатывания. -->
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DxfCleaner\DxfCleaner.csproj" />
+  </ItemGroup>
+
+</Project>
