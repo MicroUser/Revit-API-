@@ -410,12 +410,18 @@ function generateZones(){
     // показывала бы один диаметр, а после переоткрытия — другой, будто он «сам поменялся».
     const idx=[];cells.forEach((c2,ci)=>{if(pip(poly,c2.x,c2.y))idx.push(ci);});
     const need=idx.filter(ci=>needAdd(cells[ci]));
+    // Пустой need (после привязки итогового прямоугольника к сетке изолиний внутри него не
+    // осталось ни одной ячейки, которой реально нужна допка — край кластера у границы, либо
+    // сменили фоновую арматуру уже после генерации) — раньше здесь Math.max(...[]) давал
+    // -Infinity, а JSON.stringify(-Infinity) сериализуется как null и валил разбор в C#
+    // ("...target element has type 'Null'"). Такую зону просто не предлагаем — армировать нечем.
+    if(!need.length)return null;
     const am=+Math.max(...need.map(ci=>cells[ci].a)).toFixed(2);
     const n=need.length,k=classForPeak(am,200);
     return {id:'d'+DIAM[k]+'-'+(i+1),k,k0:k,step:200,avg:false,n,am,
       state:'pending',edited:false,
       poly,
-      flags:(n===1?['одиночный КЭ — подтвердить осознанно']:[]).concat(k===SPEC_K?['Aₛ выше шкалы — решить конструктивно']:[])};});}
+      flags:(n===1?['одиночный КЭ — подтвердить осознанно']:[]).concat(k===SPEC_K?['Aₛ выше шкалы — решить конструктивно']:[])};}).filter(z=>z!==null);}
 function regenerate(keepManual){
   const manual=keepManual?zones.filter(z=>(z.how==='вручную'||z.how==='копия')&&z.state!=='rejected'):[];
   zones.length=0;generateZones().forEach(z=>zones.push(z));manual.forEach(z=>zones.push(z));
