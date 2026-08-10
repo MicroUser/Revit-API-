@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Windows.Forms;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
@@ -38,8 +39,8 @@ namespace HatchAreaGenerator
 
         const double TitleRowHeight  = 18.0;
         const double HeaderRowHeight = 35.0; // выше обычного — заголовки вроде "Площадь покрытия, м2" длинные и переносятся на несколько строк
-        const double LevelRowHeight  = 10.5; // строка-заголовок уровня ("по грунту", "по кровле" и т.п.)
-        const double DataRowHeight   = 10.5;
+        const double LevelRowHeight  = 8.0; // строка-заголовок уровня ("по грунту", "по кровле" и т.п.)
+        const double DataRowHeight   = 8.0;
 
         const string AppName = "HATCHTABLE_GEN";
 
@@ -55,12 +56,12 @@ namespace HatchAreaGenerator
         const double LegendCol1Width     = 50.0;  // "Обозначение"
         const double LegendTitleRowHeight  = 18.0;
         const double LegendHeaderRowHeight = 12.0;
-        const double LegendLevelRowHeight  = 10.5;
-        const double LegendDataRowHeight   = 10.0; // вмещает миниатюру SwatchHeight с запасом
+        const double LegendLevelRowHeight  = 8.0;
+        const double LegendDataRowHeight   = 8.0; // = SwatchHeight(5) + отступы 1.5×2 — впритык, без запаса
         const double SwatchWidth  = 35.0; // размер прямоугольника-миниатюры в "Обозначение", мм
         const double SwatchHeight = 5.0;
         const double SwatchPatternAngle = 0.0; // угол/масштаб узора в миниатюре — фиксированные,
-        const double SwatchPatternScale = 0.5; // НЕ копируются с реальной штриховки (см. EnsureSwatchBlock)
+        const double SwatchPatternScale = 0.3; // НЕ копируются с реальной штриховки (см. EnsureSwatchBlock)
         const string LegendAppName = "HATCHLEGEND_GEN";
 
         // ---- Общее для обеих таблиц ----
@@ -71,9 +72,6 @@ namespace HatchAreaGenerator
         const double TitleTextHeight  = 5.0;
         const double HeaderTextHeight = 3.0;
         const double DataTextHeight   = 2.5;
-
-        // Уровень, под которым группируются типы, у которых он ещё не назначен в словаре.
-        const string NoLevelLabel = "(уровень не назначен)";
 
         // Файл словаря типов штриховок. Правится в блокноте, новые типы команды дописывают сами.
         // Лежит в %APPDATA%\HatchTable\HatchNames.txt. Формат строки:
@@ -125,6 +123,162 @@ namespace HatchAreaGenerator
         {
             public string Level;
             public List<KeyValuePair<string, HatchTypeEntry>> Items;
+        }
+
+        // ============ Журнал строк (чтобы не терять ручные строки пользователя при обновлении) ============
+
+        /// <summary>Один "слот" из журнала строк, который команда хранит в XData таблицы (см.
+        /// SaveManifest/LoadManifest) — чем была строка номер N (считая от 2, т.е. после
+        /// заголовка и шапки) при ПРОШЛОМ запуске: либо заголовком уровня (IsLevel=true, Level),
+        /// либо строкой данных конкретного типа (TypeNumber). При следующем обновлении по этому
+        /// журналу отличаем СВОИ строки от добавленных пользователем вручную — те не входят в
+        /// журнал и остаются на прежнем месте (см. ForeignRow ниже), а не затираются/удаляются.</summary>
+        private struct ManifestEntry
+        {
+            public bool IsLevel;
+            public string Level;
+            public int TypeNumber;
+            public static ManifestEntry ForLevel(string level) => new ManifestEntry { IsLevel = true, Level = level };
+            public static ManifestEntry ForType(int typeNumber) => new ManifestEntry { IsLevel = false, TypeNumber = typeNumber };
+        }
+
+        /// <summary>Снимок содержимого одной строки, добавленной пользователем ВРУЧНУЮ (не
+        /// нашедшейся в журнале прошлого запуска) — текст/выравнивание/картинка блока по каждой
+        /// колонке, чтобы буквально вернуть её на место после пересборки таблицы. AnchorIndex —
+        /// индекс элемента журнала, СРАЗУ ПОСЛЕ которого эта строка стояла в прошлый раз (-1 —
+        /// перед самой первой нашей строкой) — по нему строка возвращается на то же место
+        /// относительно соседних "наших" строк, даже если те сами сдвинулись.</summary>
+        private class ForeignRow
+        {
+            public int AnchorIndex;
+            public string[] Text;
+            public CellAlignment[] Align;
+            public ObjectId[] BlockId;
+        }
+
+        /// <summary>Один элемент финального плана строк таблицы — либо "своя" строка (заголовок
+        /// уровня или данные типа), либо "чужая" (см. ForeignRow) — используется, чтобы построить
+        /// полный порядок строк ПЕРЕД тем, как менять размер таблицы и записывать содержимое (см.
+        /// CreateHatchTable/CreateHatchLegend).</summary>
+        private class RowPlanItem
+        {
+            public bool IsForeign;
+            public ForeignRow Foreign;
+            public bool IsLevel;
+            public string Level;
+            public KeyValuePair<string, HatchTypeEntry> DataItem;
+        }
+
+        private const char ManifestSep = '';
+
+        /// <summary>Сохраняет журнал строк в XData таблицы — заодно это и есть метка "таблица
+        /// создана этой командой" (см. FindExistingTableId), отдельный маркер больше не нужен.
+        /// Код 1000 (ExtendedDataAsciiString) ограничен ~255 символами на запись — режем длинную
+        /// строку на куски и пишем несколько записей подряд под одним RegApp (это допустимо и
+        /// штатно читается обратно как единый набор через GetXDataForApplication).</summary>
+        static void SaveManifest(Table tb, string appName, List<ManifestEntry> manifest)
+        {
+            string serialized = string.Join(ManifestSep.ToString(),
+                manifest.Select(e => e.IsLevel ? "L" + e.Level : "T" + e.TypeNumber));
+
+            var values = new List<TypedValue> { new TypedValue((int)DxfCode.ExtendedDataRegAppName, appName) };
+            const int chunkSize = 250;
+            if (serialized.Length == 0)
+            {
+                values.Add(new TypedValue((int)DxfCode.ExtendedDataAsciiString, ""));
+            }
+            else
+            {
+                for (int i = 0; i < serialized.Length; i += chunkSize)
+                    values.Add(new TypedValue((int)DxfCode.ExtendedDataAsciiString,
+                        serialized.Substring(i, Math.Min(chunkSize, serialized.Length - i))));
+            }
+            tb.XData = new ResultBuffer(values.ToArray());
+        }
+
+        /// <summary>Читает журнал строк из XData таблицы (см. SaveManifest). null, если XData для
+        /// этого приложения нет вовсе (например, таблица ещё не отслеживается) — ОТ таблиц, уже
+        /// созданных СТАРОЙ версией этой команды (до появления журнала), XData для appName как
+        /// раз есть (там был простой маркер "table" без структуры журнала) — в этом случае парсинг
+        /// просто не найдёт ни одной записи и вернёт пустой список, что тоже безопасно
+        /// (см. использование в CreateHatchTable/CreateHatchLegend — пустой журнал означает "не
+        /// нашли ни одной ожидаемой строки", т.е. все текущие строки будут сочтены чужими один
+        /// раз, после чего журнал перезапишется правильно).</summary>
+        static List<ManifestEntry> LoadManifest(Table tb, string appName)
+        {
+            ResultBuffer rb = tb.GetXDataForApplication(appName);
+            if (rb == null) return null;
+
+            var sb = new StringBuilder();
+            foreach (TypedValue tv in rb)
+                if (tv.TypeCode == (int)DxfCode.ExtendedDataAsciiString)
+                    sb.Append((string)tv.Value);
+
+            var result = new List<ManifestEntry>();
+            string serialized = sb.ToString();
+            if (serialized.Length == 0) return result;
+            foreach (string part in serialized.Split(ManifestSep))
+            {
+                if (part.Length == 0) continue;
+                if (part[0] == 'L') result.Add(ManifestEntry.ForLevel(part.Substring(1)));
+                else if (part[0] == 'T' && int.TryParse(part.Substring(1), out int t)) result.Add(ManifestEntry.ForType(t));
+            }
+            return result;
+        }
+
+        /// <summary>Снимает содержимое строки row (все nCols колонок: текст, выравнивание,
+        /// картинка блока, если есть) — для сохранения "чужой" строки перед пересборкой таблицы.</summary>
+        static ForeignRow CaptureRow(Table tb, int row, int nCols, int anchorIndex)
+        {
+            var snap = new ForeignRow
+            {
+                AnchorIndex = anchorIndex,
+                Text = new string[nCols],
+                Align = new CellAlignment[nCols],
+                BlockId = new ObjectId[nCols],
+            };
+            for (int c = 0; c < nCols; c++)
+            {
+                snap.Text[c] = tb.Cells[row, c].TextString;
+                snap.Align[c] = tb.Cells[row, c].Alignment ?? CellAlignment.MiddleLeft;
+                try { snap.BlockId[c] = tb.GetBlockTableRecordId(row, c, 0); }
+                catch { snap.BlockId[c] = ObjectId.Null; }
+            }
+            return snap;
+        }
+
+        /// <summary>Возвращает снятое содержимое строки (см. CaptureRow) в ячейки row.</summary>
+        static void RestoreRow(Table tb, int row, ForeignRow snap)
+        {
+            for (int c = 0; c < snap.Text.Length; c++)
+            {
+                if (!snap.BlockId[c].IsNull)
+                    tb.SetBlockTableRecordId(row, c, snap.BlockId[c], false);
+                else if (!string.IsNullOrEmpty(snap.Text[c]))
+                    tb.Cells[row, c].TextString = snap.Text[c];
+                tb.Cells[row, c].Alignment = snap.Align[c];
+            }
+        }
+
+        /// <summary>Строит финальный порядок строк: "свои" (managedSpecs, в нужном порядке) плюс
+        /// "чужие" (foreignRows), вставленные на прежние места по AnchorIndex — сразу после того
+        /// элемента managedSpecs, после которого они стояли в прошлый раз (-1 — перед самым
+        /// первым). "Чужие" строки, чей AnchorIndex указывает на уже несуществующий (например,
+        /// managedSpecs стало меньше) элемент, уезжают в конец — лучше, чем потерять их совсем.</summary>
+        static List<RowPlanItem> BuildRowPlan(List<RowPlanItem> managedSpecs, List<ForeignRow> foreignRows)
+        {
+            var plan = new List<RowPlanItem>();
+            plan.AddRange(foreignRows.Where(f => f.AnchorIndex == -1)
+                .Select(f => new RowPlanItem { IsForeign = true, Foreign = f }));
+            for (int i = 0; i < managedSpecs.Count; i++)
+            {
+                plan.Add(managedSpecs[i]);
+                plan.AddRange(foreignRows.Where(f => f.AnchorIndex == i)
+                    .Select(f => new RowPlanItem { IsForeign = true, Foreign = f }));
+            }
+            plan.AddRange(foreignRows.Where(f => f.AnchorIndex >= managedSpecs.Count)
+                .Select(f => new RowPlanItem { IsForeign = true, Foreign = f }));
+            return plan;
         }
 
         [CommandMethod("HATCHTABLE")]
@@ -212,18 +366,77 @@ namespace HatchAreaGenerator
                     oldTb.XData = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, AppName));
                 }
 
+                const int nCols = 5;
+
                 Table tb;
-                // "Наименование" и "Тип" приходят из словаря (ConfigPath) — стабильны между
-                // запусками сами по себе. А вот "Примечание" вводится ВРУЧНУЮ прямо в таблице и ни
-                // из чего не вычисляется — при обновлении его нужно сохранить и перенести на новые
-                // номера строк (сортировка/группировка могла сдвинуть строку), а не затереть. Ключ
-                // для сохранения — итоговый текст "Наименование" (у штриховок, в отличие от
-                // блоков в BLOCKTABLE, нет своего стабильного ObjectId-определения).
-                Dictionary<string, string> preservedNotes = new Dictionary<string, string>();
+                // Текст, УЖЕ стоящий в ячейке таблицы, главнее вычисленного значения — тот же
+                // принцип, что и в BLOCKTABLE: если пользователь вручную поправил "Наименование"
+                // прямо в таблице, повторный запуск не должен затирать эту правку своим
+                // вычисленным значением, даже если оно отличается — и, как и в BLOCKTABLE, эта
+                // правка ЗАПИСЫВАЕТСЯ ОБРАТНО в источник (там — атрибут блока, здесь — поле
+                // "название" в словаре, см. запись в nameMap ниже и повторный SaveNameMap), чтобы
+                // источник снова совпал с тем, что показано в таблице. "Примечание" источника не
+                // имеет вовсе (только вручную) — сохраняется как есть, без сравнения.
+                // Ключ сохранения для ОБОИХ — TypeNumber (столбец "Тип"): он стабилен (см.
+                // HatchTypeEntry.TypeNumber), в отличие от текста "Наименование", который теперь
+                // сам может быть тем, что мы сохраняем/перезаписываем.
+                Dictionary<int, string> preservedNames = new Dictionary<int, string>();
+                Dictionary<int, string> preservedNotes = new Dictionary<int, string>();
+                // Строки, добавленные пользователем ВРУЧНУЮ (не найденные в журнале прошлого
+                // запуска — см. ManifestEntry/LoadManifest выше) — сохраняются буквально и
+                // возвращаются на прежнее относительное место после пересборки (см. BuildRowPlan).
+                List<ForeignRow> foreignRows = new List<ForeignRow>();
 
                 if (isUpdate)
                 {
                     tb = (Table)tr.GetObject(existingId, OpenMode.ForWrite);
+
+                    List<ManifestEntry> oldManifest = LoadManifest(tb, AppName);
+                    if (oldManifest != null)
+                    {
+                        int mi = 0;
+                        for (int r = 2; r < tb.Rows.Count; r++)
+                        {
+                            bool isMatch = false;
+                            if (mi < oldManifest.Count)
+                            {
+                                ManifestEntry expected = oldManifest[mi];
+                                if (expected.IsLevel)
+                                {
+                                    isMatch = tb.Cells[r, 0].TextString == expected.Level;
+                                }
+                                else if (int.TryParse(tb.Cells[r, 2].TextString, out int rowType) && rowType == expected.TypeNumber)
+                                {
+                                    isMatch = true;
+                                    string rowName = tb.Cells[r, 1].TextString;
+                                    if (!string.IsNullOrEmpty(rowName)) preservedNames[rowType] = rowName;
+                                    string rowNote = tb.Cells[r, 4].TextString;
+                                    if (!string.IsNullOrEmpty(rowNote)) preservedNotes[rowType] = rowNote;
+                                }
+                            }
+
+                            if (isMatch) { mi++; continue; }
+                            foreignRows.Add(CaptureRow(tb, r, nCols, mi - 1));
+                        }
+                    }
+                    else
+                    {
+                        // Журнала нет — таблица создана до появления этой возможности. Работаем по
+                        // старой эвристике ("Поз." число = строка данных), ничего не выделяем как
+                        // чужое (чтобы не размножить существующие строки уровня как "чужие" —
+                        // отличить их от НАСТОЯЩИХ ручных строк без журнала нечем). Журнал появится
+                        // после этого запуска, и со следующего обновления сохранение ручных строк
+                        // заработает.
+                        for (int r = 2; r < tb.Rows.Count; r++)
+                        {
+                            if (!int.TryParse(tb.Cells[r, 0].TextString, out _)) continue;
+                            if (!int.TryParse(tb.Cells[r, 2].TextString, out int rowType)) continue;
+                            string rowName = tb.Cells[r, 1].TextString;
+                            if (!string.IsNullOrEmpty(rowName)) preservedNames[rowType] = rowName;
+                            string rowNote = tb.Cells[r, 4].TextString;
+                            if (!string.IsNullOrEmpty(rowNote)) preservedNotes[rowType] = rowNote;
+                        }
+                    }
 
                     // Снимаем ВСЕ объединения ячеек, оставшиеся с прошлой раскладки (строки-
                     // заголовки уровня могли оказаться на других номерах строк после обновления —
@@ -232,20 +445,6 @@ namespace HatchAreaGenerator
                     // непредсказуемо. Объединяем заново ниже, уже по новой раскладке.
                     if (tb.Rows.Count > 0 && tb.Columns.Count > 0)
                         tb.UnmergeCells(CellRange.Create(tb, 0, 0, tb.Rows.Count - 1, tb.Columns.Count - 1));
-
-                    for (int r = 2; r < tb.Rows.Count; r++)
-                    {
-                        // Различаем строку данных от строки-заголовка уровня по колонке "Поз." —
-                        // у данных там число позиции, у заголовка уровня — текст уровня (не число).
-                        if (!int.TryParse(tb.Cells[r, 0].TextString, out _)) continue;
-
-                        string rowName = tb.Cells[r, 1].TextString;
-                        if (string.IsNullOrEmpty(rowName)) continue;
-
-                        string rowNote = tb.Cells[r, 4].TextString;
-                        if (!string.IsNullOrEmpty(rowNote))
-                            preservedNotes[rowName] = rowNote;
-                    }
                 }
                 else
                 {
@@ -263,9 +462,19 @@ namespace HatchAreaGenerator
                 EnsureLayer(db, tr, LayerName);
                 tb.Layer = LayerName;
 
-                const int nCols = 5;
-                int dataRowCount = sections.Sum(s => s.Items.Count);
-                int nRows = 2 + sections.Count + dataRowCount; // заголовок + шапка + уровни + данные
+                // "Свои" строки (уровни+данные) в нужном порядке, затем "чужие" — на прежние
+                // относительные места (см. BuildRowPlan). Отсюда же — итоговое число строк.
+                var managedSpecs = new List<RowPlanItem>();
+                foreach (LevelSection section in sections)
+                {
+                    if (!string.IsNullOrEmpty(section.Level))
+                        managedSpecs.Add(new RowPlanItem { IsLevel = true, Level = section.Level });
+                    foreach (KeyValuePair<string, HatchTypeEntry> kv in section.Items)
+                        managedSpecs.Add(new RowPlanItem { IsLevel = false, DataItem = kv });
+                }
+                int dataRowCount = managedSpecs.Count(s => !s.IsLevel);
+                List<RowPlanItem> rowPlan = BuildRowPlan(managedSpecs, foreignRows);
+                int nRows = 2 + rowPlan.Count; // заголовок + шапка + (уровни + данные + чужие строки)
 
                 if (isUpdate)
                 {
@@ -291,44 +500,82 @@ namespace HatchAreaGenerator
                     tb.Cells[1, c].Alignment = CellAlignment.MiddleCenter;
                 }
 
-                // Данные — по уровням, "Поз." сквозная нумерация через все уровни
+                // Данные — по плану rowPlan; "Поз." сквозная нумерация только по своим строкам
+                // данных (чужие строки её не сбивают и сохраняют собственный текст как есть).
                 string fmt = "F" + AreaDecimals;
+                bool dictionaryChanged = false; // текст таблицы переписал nameMap — см. ниже
                 int pos = 1;
                 int row = 2;
                 var levelRows = new List<int>();
-                foreach (LevelSection section in sections)
+                var newManifest = new List<ManifestEntry>();
+
+                foreach (RowPlanItem item in rowPlan)
                 {
-                    levelRows.Add(row);
-                    tb.Cells[row, 0].TextString = section.Level;
-                    tb.Cells[row, 0].Alignment = CellAlignment.MiddleLeft;
-                    row++;
-
-                    foreach (KeyValuePair<string, HatchTypeEntry> kv in section.Items)
+                    if (item.IsForeign)
                     {
-                        HatchTypeEntry entry = kv.Value;
-                        HatchGroupInfo info = groups[kv.Key];
-                        double area = info.Area * AreaScale;
-                        string name = Resolve(entry, info.AutoLabel);
-
-                        tb.Cells[row, 0].TextString = pos.ToString();
-                        tb.Cells[row, 0].Alignment = CellAlignment.MiddleCenter;
-
-                        tb.Cells[row, 1].TextString = name;
-                        tb.Cells[row, 1].Alignment = CellAlignment.MiddleLeft;
-
-                        tb.Cells[row, 2].TextString = entry.TypeNumber.ToString();
-                        tb.Cells[row, 2].Alignment = CellAlignment.MiddleCenter;
-
-                        tb.Cells[row, 3].TextString = area.ToString(fmt);
-                        tb.Cells[row, 3].Alignment = CellAlignment.MiddleCenter;
-
-                        tb.Cells[row, 4].TextString = preservedNotes.TryGetValue(name, out string note) ? note : "";
-                        tb.Cells[row, 4].Alignment = CellAlignment.MiddleCenter;
-
-                        pos++;
+                        RestoreRow(tb, row, item.Foreign);
                         row++;
+                        continue;
                     }
+
+                    if (item.IsLevel)
+                    {
+                        levelRows.Add(row);
+                        tb.Cells[row, 0].TextString = item.Level;
+                        tb.Cells[row, 0].Alignment = CellAlignment.MiddleLeft;
+                        // Явно очищаем остальные колонки — при обновлении эта же строка на
+                        // прошлой раскладке могла быть строкой ДАННЫХ (текст в этих колонках), а
+                        // TextString выше трогает только колонку 0 — без явной очистки старый
+                        // текст остаётся висеть под новой строкой уровня.
+                        for (int c = 1; c < nCols; c++)
+                            tb.Cells[row, c].Contents.Clear();
+                        newManifest.Add(ManifestEntry.ForLevel(item.Level));
+                        row++;
+                        continue;
+                    }
+
+                    HatchTypeEntry entry = item.DataItem.Value;
+                    HatchGroupInfo info = groups[item.DataItem.Key];
+                    double area = info.Area * AreaScale;
+
+                    // Текст таблицы главнее вычисленного значения (см. пояснение у
+                    // preservedNames выше) — и если он отличается, записываем его обратно в
+                    // словарь (nameMap), а не только показываем поверх.
+                    string computedName = Resolve(entry, info.AutoLabel);
+                    string name = computedName;
+                    if (preservedNames.TryGetValue(entry.TypeNumber, out string existingName)
+                        && !string.IsNullOrEmpty(existingName) && existingName != computedName)
+                    {
+                        name = existingName;
+                        entry.Name = existingName;
+                        dictionaryChanged = true;
+                    }
+
+                    tb.Cells[row, 0].TextString = pos.ToString();
+                    tb.Cells[row, 0].Alignment = CellAlignment.MiddleCenter;
+
+                    tb.Cells[row, 1].TextString = name;
+                    tb.Cells[row, 1].Alignment = CellAlignment.MiddleLeft;
+
+                    tb.Cells[row, 2].TextString = entry.TypeNumber.ToString();
+                    tb.Cells[row, 2].Alignment = CellAlignment.MiddleCenter;
+
+                    tb.Cells[row, 3].TextString = area.ToString(fmt);
+                    tb.Cells[row, 3].Alignment = CellAlignment.MiddleCenter;
+
+                    tb.Cells[row, 4].TextString = preservedNotes.TryGetValue(entry.TypeNumber, out string note) ? note : "";
+                    tb.Cells[row, 4].Alignment = CellAlignment.MiddleCenter;
+
+                    newManifest.Add(ManifestEntry.ForType(entry.TypeNumber));
+                    pos++;
+                    row++;
                 }
+
+                // Ручные правки "Наименование" прямо в таблице переписали nameMap (см. цикл выше)
+                // — пересохраняем словарь, чтобы источник (файл) снова совпал с тем, что показано
+                // в таблице.
+                if (dictionaryChanged)
+                    SaveNameMap(ConfigPath, nameMap);
 
                 // Размеры столбцов, высоты строк, текста и отступы содержимого ячеек
                 tb.HorizontalCellMargin = CellMarginH;
@@ -352,11 +599,34 @@ namespace HatchAreaGenerator
                     for (int c = 0; c < nCols; c++)
                         tb.Cells[r, c].TextHeight = DataTextHeight;
 
-                // Объединяем строки-заголовки уровня на всю ширину таблицы — ПОСЛЕ того, как
-                // заданы текст/высоты для всех строк, но ДО ApplyTextStyle/GenerateLayout, чтобы
-                // стиль и раскладка учли уже объединённые ячейки.
+                // Заголовок таблицы (строка 0) объединяем СРАЗУ, до любого GenerateLayout — она
+                // никогда не появляется через InsertRows (тот работает только с хвостом таблицы,
+                // начиная со строки 2), так что "отстаиваться" ей не нужно. Если вызвать
+                // GenerateLayout, пока заголовок ещё НЕ объединён, длинный текст вминается в узкую
+                // колонку "Поз." (9 мм), переносится по одной букве на строку — и GenerateLayout
+                // в этот момент раздувает высоту строки под этот перенос (проверено вживую: высота
+                // "уезжала" до сотен мм); объединение ПОСЛЕ этого высоту обратно уже не сжимает.
+                // Заголовок объединяем явно, а не полагаемся на автоматическое поведение стиля
+                // таблицы: при ОБНОВЛЕНИИ ранее снимаются ВСЕ объединения на таблице целиком (см.
+                // UnmergeCells выше — нужно было для сброса "зависших" объединений у бывших строк
+                // уровня), и это заодно снимало объединение и у самой строки заголовка.
+                tb.MergeCells(CellRange.Create(tb, 0, 0, 0, nCols - 1));
+
+                // Строки-заголовки уровня, добавленные через InsertRows (уровней стало больше, чем
+                // было), "не готовы" к объединению сразу — проверено вживую: MergeCells на такой
+                // строке тихо не срабатывает, пока таблица не пересчитает раскладку хотя бы раз
+                // ПОСЛЕ вставки. Промежуточный GenerateLayout "устаканивает" структуру перед их
+                // MergeCells — заголовок к этому моменту уже объединён и не пострадает.
+                tb.GenerateLayout();
                 foreach (int r in levelRows)
                     tb.MergeCells(CellRange.Create(tb, r, 0, r, nCols - 1));
+
+                // Тот же промежуточный GenerateLayout мог по той же причине (короткий текст
+                // уровня в узкой НЕобъединённой колонке "Поз." переносится и раздувает высоту)
+                // увеличить высоту строк уровня ДО их объединения — переустанавливаем явно ПОСЛЕ
+                // объединения, когда тексту уже ничего не мешает уместиться в полную ширину.
+                foreach (int r in levelRows)
+                    tb.Rows[r].Height = LevelRowHeight;
 
                 // Текстовый стиль — на ВСЕ ячейки, применяем после того как таблица дорощена/дана
                 // нужным числом строк, но ДО GenerateLayout (он пересчитывает размеры ячеек под
@@ -364,6 +634,10 @@ namespace HatchAreaGenerator
                 ApplyTextStyle(db, tr, tb, TextStyleName, ed);
 
                 tb.GenerateLayout();
+                // Сбрасываем внутренний кеш графики содержимого ячеек — тот же приём, что и в
+                // HATCHLEGEND (см. пояснение там): без него после объединения/переразметки часть
+                // содержимого ячеек может отрисовываться по старому состоянию.
+                tb.RecomputeTableBlock(true);
 
                 // Добавление таблицы в модель (только при первом создании — при обновлении
                 // таблица уже находится в базе). XData ставим ПОСЛЕ AppendEntity/
@@ -375,15 +649,13 @@ namespace HatchAreaGenerator
                         targetSpace.ObjectId, OpenMode.ForWrite);
                     targetSpaceWrite.AppendEntity(tb);
                     tr.AddNewlyCreatedDBObject(tb, true);
-
-                    // ResultBuffer только с маркером имени приложения (код 1001) без данных после
-                    // него не сохраняется вообще — добавляем реальное значение (код 1000) вслед за
-                    // маркером (см. переписку по BLOCKTABLE).
                     EnsureRegApp(db, tr, AppName);
-                    tb.XData = new ResultBuffer(
-                        new TypedValue((int)DxfCode.ExtendedDataRegAppName, AppName),
-                        new TypedValue((int)DxfCode.ExtendedDataAsciiString, "table"));
                 }
+
+                // Журнал строк — заодно и метка "таблица создана этой командой" (см.
+                // FindExistingTableId), пишем на каждом запуске (не только при создании), чтобы
+                // при следующем обновлении журнал отражал АКТУАЛЬНУЮ раскладку.
+                SaveManifest(tb, AppName, newManifest);
 
                 Layout targetLayout = (Layout)tr.GetObject(targetSpace.LayoutId, OpenMode.ForRead);
                 tr.Commit();
@@ -466,10 +738,73 @@ namespace HatchAreaGenerator
                     oldTb.XData = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, LegendAppName));
                 }
 
+                const int nCols = 3;
+
                 Table tb;
+                // Текст "Наименование", уже стоящий в таблице, главнее вычисленного значения —
+                // тот же принцип, что и в HATCHTABLE/BLOCKTABLE: правка записывается ОБРАТНО в
+                // словарь (см. запись в nameMap ниже). Ключ — номер типа, извлечённый из соседней
+                // ячейки "Тип" ("тип N") — она отдельная колонка (см. столбец 1 ниже), а не текст,
+                // склеенный с названием, так что парсить несложно.
+                Dictionary<int, string> preservedNames = new Dictionary<int, string>();
+                // Строки, добавленные пользователем ВРУЧНУЮ (не найденные в журнале прошлого
+                // запуска — см. ManifestEntry/LoadManifest) — сохраняются буквально и
+                // возвращаются на прежнее относительное место после пересборки (см. BuildRowPlan).
+                List<ForeignRow> foreignRows = new List<ForeignRow>();
+
                 if (isUpdate)
                 {
                     tb = (Table)tr.GetObject(existingId, OpenMode.ForWrite);
+
+                    List<ManifestEntry> oldManifest = LoadManifest(tb, LegendAppName);
+                    if (oldManifest != null)
+                    {
+                        int mi = 0;
+                        for (int r = 2; r < tb.Rows.Count; r++)
+                        {
+                            bool isMatch = false;
+                            if (mi < oldManifest.Count)
+                            {
+                                ManifestEntry expected = oldManifest[mi];
+                                if (expected.IsLevel)
+                                {
+                                    isMatch = tb.Cells[r, 0].TextString == expected.Level;
+                                }
+                                else
+                                {
+                                    string typeText = tb.Cells[r, 1].TextString;
+                                    if (!string.IsNullOrEmpty(typeText)
+                                        && typeText.StartsWith("тип ", StringComparison.OrdinalIgnoreCase)
+                                        && int.TryParse(typeText.Substring(4).Trim(), out int rowType)
+                                        && rowType == expected.TypeNumber)
+                                    {
+                                        isMatch = true;
+                                        string rowName = tb.Cells[r, 0].TextString;
+                                        if (!string.IsNullOrEmpty(rowName)) preservedNames[rowType] = rowName;
+                                    }
+                                }
+                            }
+
+                            if (isMatch) { mi++; continue; }
+                            foreignRows.Add(CaptureRow(tb, r, nCols, mi - 1));
+                        }
+                    }
+                    else
+                    {
+                        // Журнала нет — таблица создана до появления этой возможности. Работаем по
+                        // старой эвристике, ничего не выделяем как чужое (см. пояснение в
+                        // CreateHatchTable) — журнал появится после этого запуска.
+                        for (int r = 2; r < tb.Rows.Count; r++)
+                        {
+                            string typeText = tb.Cells[r, 1].TextString;
+                            if (string.IsNullOrEmpty(typeText) || !typeText.StartsWith("тип ", StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            if (!int.TryParse(typeText.Substring(4).Trim(), out int rowType)) continue;
+                            string rowName = tb.Cells[r, 0].TextString;
+                            if (!string.IsNullOrEmpty(rowName)) preservedNames[rowType] = rowName;
+                        }
+                    }
+
                     if (tb.Rows.Count > 0 && tb.Columns.Count > 0)
                         tb.UnmergeCells(CellRange.Create(tb, 0, 0, tb.Rows.Count - 1, tb.Columns.Count - 1));
                 }
@@ -486,12 +821,19 @@ namespace HatchAreaGenerator
                 EnsureLayer(db, tr, LayerName);
                 tb.Layer = LayerName;
 
-                // 3 столбца: 0="Наименование", 1="Тип" (без видимой границы с 0 — см. ниже),
-                // 2="Обозначение". Визуально это по-прежнему 2 столбца, как и просили (135/50 мм) —
-                // 0 и 1 вместе как раз дают 135 мм.
-                const int nCols = 3;
-                int dataRowCount = sections.Sum(s => s.Items.Count);
-                int nRows = 2 + sections.Count + dataRowCount;
+                // "Свои" строки (уровни+данные) в нужном порядке, затем "чужие" — на прежние
+                // относительные места (см. BuildRowPlan). Отсюда же — итоговое число строк.
+                var managedSpecs = new List<RowPlanItem>();
+                foreach (LevelSection section in sections)
+                {
+                    if (!string.IsNullOrEmpty(section.Level))
+                        managedSpecs.Add(new RowPlanItem { IsLevel = true, Level = section.Level });
+                    foreach (KeyValuePair<string, HatchTypeEntry> kv in section.Items)
+                        managedSpecs.Add(new RowPlanItem { IsLevel = false, DataItem = kv });
+                }
+                int dataRowCount = managedSpecs.Count(s => !s.IsLevel);
+                List<RowPlanItem> rowPlan = BuildRowPlan(managedSpecs, foreignRows);
+                int nRows = 2 + rowPlan.Count;
 
                 if (isUpdate)
                 {
@@ -515,41 +857,78 @@ namespace HatchAreaGenerator
                 tb.Cells[1, 2].TextString = "Обозначение";
                 tb.Cells[1, 2].Alignment = CellAlignment.MiddleCenter;
 
+                bool dictionaryChanged = false; // текст таблицы переписал nameMap — см. ниже
                 int row = 2;
                 var levelRows = new List<int>();
-                foreach (LevelSection section in sections)
+                var newManifest = new List<ManifestEntry>();
+
+                foreach (RowPlanItem item in rowPlan)
                 {
-                    levelRows.Add(row);
-                    // Уровень — БЕЗ объединения ячеек (по просьбе), текст по центру своей ячейки
-                    // (столбец 0), столбцы 1 и 2 в этой строке остаются пустыми.
-                    tb.Cells[row, 0].TextString = section.Level;
-                    tb.Cells[row, 0].Alignment = CellAlignment.MiddleCenter;
-                    row++;
-
-                    foreach (KeyValuePair<string, HatchTypeEntry> kv in section.Items)
+                    if (item.IsForeign)
                     {
-                        HatchTypeEntry entry = kv.Value;
-                        HatchGroupInfo info = groups[kv.Key];
-                        string name = Resolve(entry, info.AutoLabel);
-
-                        tb.Cells[row, 0].TextString = name;
-                        tb.Cells[row, 0].Alignment = CellAlignment.MiddleLeft;
-
-                        // "Тип N" — отдельная (узкая) колонка, всегда прижат к правому краю,
-                        // независимо от длины названия слева (см. LegendTypeColWidth выше).
-                        tb.Cells[row, 1].TextString = $"тип {entry.TypeNumber}";
-                        tb.Cells[row, 1].Alignment = CellAlignment.MiddleRight;
-
-                        // autoFit=false — иначе AutoCAD растягивает блок под размер ячейки (у
-                        // столбца "Обозначение" 50 мм минус отступы получалось ~47×6.71 мм вместо
-                        // заданных 35×5) вместо показа в реальном размере блока.
-                        ObjectId swatchId = EnsureSwatchBlock(db, tr, entry.TypeNumber, info);
-                        tb.SetBlockTableRecordId(row, 2, swatchId, false);
-                        tb.Cells[row, 2].Alignment = CellAlignment.MiddleCenter;
-
+                        RestoreRow(tb, row, item.Foreign);
                         row++;
+                        continue;
                     }
+
+                    if (item.IsLevel)
+                    {
+                        levelRows.Add(row);
+                        // Уровень — БЕЗ объединения ячеек (по просьбе), текст по центру своей
+                        // ячейки (столбец 0), столбцы 1 и 2 в этой строке остаются пустыми.
+                        tb.Cells[row, 0].TextString = item.Level;
+                        tb.Cells[row, 0].Alignment = CellAlignment.MiddleCenter;
+                        // Явно очищаем столбцы 1 (тип) и 2 (миниатюра) — при обновлении эта же
+                        // строка на прошлой раскладке могла быть строкой ДАННЫХ с картинкой
+                        // блока; TextString выше трогает только столбец 0, и без явной очистки
+                        // старые "тип N" и миниатюра остаются висеть под новой строкой уровня.
+                        tb.Cells[row, 1].Contents.Clear();
+                        tb.Cells[row, 2].Contents.Clear();
+                        newManifest.Add(ManifestEntry.ForLevel(item.Level));
+                        row++;
+                        continue;
+                    }
+
+                    HatchTypeEntry entry = item.DataItem.Value;
+                    HatchGroupInfo info = groups[item.DataItem.Key];
+
+                    // Текст таблицы главнее вычисленного значения (см. пояснение у
+                    // preservedNames выше) — и если он отличается, записываем его обратно в
+                    // словарь, а не только показываем поверх.
+                    string computedName = Resolve(entry, info.AutoLabel);
+                    string name = computedName;
+                    if (preservedNames.TryGetValue(entry.TypeNumber, out string existingName)
+                        && !string.IsNullOrEmpty(existingName) && existingName != computedName)
+                    {
+                        name = existingName;
+                        entry.Name = existingName;
+                        dictionaryChanged = true;
+                    }
+
+                    tb.Cells[row, 0].TextString = name;
+                    tb.Cells[row, 0].Alignment = CellAlignment.MiddleLeft;
+
+                    // "Тип N" — отдельная (узкая) колонка, всегда прижат к правому краю,
+                    // независимо от длины названия слева (см. LegendTypeColWidth выше).
+                    tb.Cells[row, 1].TextString = $"тип {entry.TypeNumber}";
+                    tb.Cells[row, 1].Alignment = CellAlignment.MiddleRight;
+
+                    // autoFit=false — иначе AutoCAD растягивает блок под размер ячейки (у
+                    // столбца "Обозначение" 50 мм минус отступы получалось ~47×6.71 мм вместо
+                    // заданных 35×5) вместо показа в реальном размере блока.
+                    ObjectId swatchId = EnsureSwatchBlock(db, tr, entry.TypeNumber, info);
+                    tb.SetBlockTableRecordId(row, 2, swatchId, false);
+                    tb.Cells[row, 2].Alignment = CellAlignment.MiddleCenter;
+
+                    newManifest.Add(ManifestEntry.ForType(entry.TypeNumber));
+                    row++;
                 }
+
+                // Ручные правки "Наименование" прямо в таблице переписали nameMap (см. цикл выше)
+                // — пересохраняем словарь, чтобы источник (файл) снова совпал с тем, что показано
+                // в таблице.
+                if (dictionaryChanged)
+                    SaveNameMap(ConfigPath, nameMap);
 
                 tb.HorizontalCellMargin = CellMarginH;
                 tb.VerticalCellMargin = CellMarginV;
@@ -590,6 +969,13 @@ namespace HatchAreaGenerator
 
                 ApplyTextStyle(db, tr, tb, TextStyleName, ed);
                 tb.GenerateLayout();
+                // GenerateLayout пересчитывает только раскладку (размеры/позиции ячеек) — у
+                // таблицы есть СВОЙ внутренний кеш графики содержимого ячеек ("блок таблицы"),
+                // который не сбрасывается сам по себе при изменении определений блоков-миниатюр
+                // (EnsureSwatchBlock переопределяет их содержимое в этой же транзакции, до этого
+                // места). Без принудительного пересчёта ячейки показывают старую картинку, даже
+                // если сам блок и его свойства (угол/масштаб штриховки) в базе уже верные.
+                tb.RecomputeTableBlock(true);
 
                 if (!isUpdate)
                 {
@@ -597,12 +983,13 @@ namespace HatchAreaGenerator
                         targetSpace.ObjectId, OpenMode.ForWrite);
                     targetSpaceWrite.AppendEntity(tb);
                     tr.AddNewlyCreatedDBObject(tb, true);
-
                     EnsureRegApp(db, tr, LegendAppName);
-                    tb.XData = new ResultBuffer(
-                        new TypedValue((int)DxfCode.ExtendedDataRegAppName, LegendAppName),
-                        new TypedValue((int)DxfCode.ExtendedDataAsciiString, "table"));
                 }
+
+                // Журнал строк — заодно и метка "таблица создана этой командой" (см.
+                // FindExistingTableId), пишем на каждом запуске (не только при создании), чтобы
+                // при следующем обновлении журнал отражал АКТУАЛЬНУЮ раскладку.
+                SaveManifest(tb, LegendAppName, newManifest);
 
                 Layout targetLayout = (Layout)tr.GetObject(targetSpace.LayoutId, OpenMode.ForRead);
                 tr.Commit();
@@ -725,13 +1112,21 @@ namespace HatchAreaGenerator
             hatch.SetDatabaseDefaults();
             hatch.Layer = "0";
             hatch.SetHatchPattern(info.PatternType, info.PatternName);
+
+            var loopIds = new ObjectIdCollection { boundary.ObjectId };
+            hatch.AppendLoop(HatchLoopTypes.Default, loopIds);
+            hatch.EvaluateHatch(true); // первый расчёт геометрии узора — с параметрами по умолчанию
+
+            // Угол/масштаб/цвета — ПОСЛЕ первого EvaluateHatch. Проверено вживую: если задать их
+            // раньше (до контура/первого расчёта) и вызвать EvaluateHatch один раз, значение
+            // PatternScale в свойствах записывается верно, но геометрия узора отрисовывается по
+            // старому (умолчательному) масштабу — ровно то же самое, что чинит повторный ввод
+            // ТОГО ЖЕ значения в палитре свойств вручную. Поэтому пересчитываем ЕЩЁ РАЗ уже после
+            // того, как параметры выставлены на уже "разрешённом" (evaluated) объекте.
             hatch.PatternAngle = SwatchPatternAngle;
             hatch.PatternScale = SwatchPatternScale;
             hatch.Color = info.Color;
             if (info.BackgroundColor != null) hatch.BackgroundColor = info.BackgroundColor;
-
-            var loopIds = new ObjectIdCollection { boundary.ObjectId };
-            hatch.AppendLoop(HatchLoopTypes.Default, loopIds);
             hatch.EvaluateHatch(true);
 
             return btr.ObjectId;
@@ -759,7 +1154,10 @@ namespace HatchAreaGenerator
         }
 
         /// <summary>Разбирает значение справа от "=": "*" — исключить штриховку целиком; иначе
-        /// "тип | уровень | название" (уровень/название могут быть пустыми). Если первая часть не
+        /// "тип | уровень | название" (уровень/название могут быть пустыми), где название "*"
+        /// ТОЖЕ означает исключение — это единственный способ исключить тип, у которого уже есть
+        /// присвоенный номер (просто заменить всё значение на голое "*" нельзя: следующее
+        /// сохранение присвоило бы номер заново, потеряв связь со старым). Если первая часть не
         /// число — это СТАРЫЙ формат файла ("узор|цвет|фон = название", без типа/уровня) или ещё
         /// не размеченная строка: всё значение целиком считаем названием, номер типа присвоится
         /// при следующем сохранении (см. SaveNameMap) — правки названий, сделанные до появления
@@ -779,6 +1177,12 @@ namespace HatchAreaGenerator
 
             if (parts.Length >= 2) entry.Level = parts[1].Trim();
             if (parts.Length >= 3) entry.Name = string.Join("|", parts.Skip(2)).Trim();
+
+            if (entry.Name == "*")
+            {
+                entry.Excluded = true;
+                entry.Name = "";
+            }
             return entry;
         }
 
@@ -814,12 +1218,16 @@ namespace HatchAreaGenerator
                 sw.WriteLine("#   узор|цвет|фон = тип | уровень | название");
                 sw.WriteLine("# тип — номер \"Тип N\", присваивается автоматически один раз и не меняется.");
                 sw.WriteLine("# уровень — группа для \"Условные обозначения\"/\"Ведомость площадей\" (напр.: по грунту, по кровле). Пусто — ещё не назначен.");
-                sw.WriteLine("# название — пусто = авто-название. '*' вместо всего значения после '=' — не учитывать штриховку вовсе.");
+                sw.WriteLine("# название — пусто = авто-название. '*' вместо названия (или вместо всего значения) — не учитывать штриховку вовсе.");
                 sw.WriteLine();
                 foreach (KeyValuePair<string, HatchTypeEntry> kv in map.OrderBy(kv => kv.Key, StringComparer.CurrentCultureIgnoreCase))
                 {
+                    // Если у исключённого типа уже есть номер (обычный случай — исключают, когда
+                    // тип уже был на чертеже) — сохраняем "тип | уровень | *", а не голое "*": так
+                    // при повторном включении (убрать "*") тип/уровень не потеряются и не
+                    // присвоится новый номер взамен старого.
                     string valueText = kv.Value.Excluded
-                        ? "*"
+                        ? (kv.Value.TypeNumber > 0 ? $"{kv.Value.TypeNumber} | {kv.Value.Level} | *" : "*")
                         : $"{kv.Value.TypeNumber} | {kv.Value.Level} | {kv.Value.Name}";
                     sw.WriteLine(kv.Key + " = " + valueText);
                 }
@@ -829,17 +1237,32 @@ namespace HatchAreaGenerator
         static string Resolve(HatchTypeEntry entry, string autoLabel)
             => !string.IsNullOrWhiteSpace(entry.Name) ? entry.Name : autoLabel;
 
-        /// <summary>Группирует записи по уровню (пустой уровень — под NoLevelLabel). Уровни
-        /// упорядочены по МИНИМАЛЬНОМУ номеру типа внутри них (т.е. в порядке появления первого
-        /// типа этого уровня в словаре) — так порядок уровней в таблице предсказуем и не скачет
-        /// между запусками. Внутри уровня записи упорядочены по номеру типа.</summary>
+        /// <summary>Группирует записи по уровню — сразу, даже если размечена только часть типов.
+        /// Размеченные уровни упорядочены по МИНИМАЛЬНОМУ номеру типа внутри них (порядок первого
+        /// появления уровня в словаре) — предсказуемо и не скачет между запусками. Ещё не
+        /// размеченные типы (Level пуст) собираются в ОДНУ секцию с Level="" и всегда идут
+        /// ПОСЛЕДНЕЙ, не участвуя в сортировке по номеру типа вместе с размеченными — так
+        /// назначение уровня одному типу перемещает только его, не перетасовывая остальные.
+        /// Секция с Level="" — сигнал вызывающему коду не рисовать для неё строку-заголовок.</summary>
         static List<LevelSection> GroupByLevel(IEnumerable<KeyValuePair<string, HatchTypeEntry>> entries)
         {
-            return entries
-                .GroupBy(kv => string.IsNullOrWhiteSpace(kv.Value.Level) ? NoLevelLabel : kv.Value.Level)
+            var list = entries.ToList();
+
+            var sections = list
+                .Where(kv => !string.IsNullOrWhiteSpace(kv.Value.Level))
+                .GroupBy(kv => kv.Value.Level)
                 .Select(g => new LevelSection { Level = g.Key, Items = g.OrderBy(kv => kv.Value.TypeNumber).ToList() })
                 .OrderBy(s => s.Items.Min(kv => kv.Value.TypeNumber))
                 .ToList();
+
+            var unleveled = list
+                .Where(kv => string.IsNullOrWhiteSpace(kv.Value.Level))
+                .OrderBy(kv => kv.Value.TypeNumber)
+                .ToList();
+            if (unleveled.Count > 0)
+                sections.Add(new LevelSection { Level = "", Items = unleveled });
+
+            return sections;
         }
 
         // ============ Цвет ============
