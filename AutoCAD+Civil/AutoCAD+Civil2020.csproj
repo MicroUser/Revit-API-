@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Параллельная сборка под AutoCAD 2020 (.NET Framework 4.8) — AutoCAD+Civil.csproj
+       (net8.0-windows, AutoCAD 2025) не трогается. AutoCAD 2025 — первая версия на .NET 8;
+       все более ранние версии, включая 2020, работают на .NET Framework, поэтому нужен
+       отдельный TargetFramework и отдельные (версионно-специфичные) ссылки на acmgd/acdbmgd/
+       accoremgd/AdWindows. Исходники (BlockTableCommand.cs, RibbonSetup.cs) ОБЩИЕ с
+       AutoCAD+Civil.csproj — подхватываются автоглобом из этой же папки, отдельно не
+       перечисляются. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>AutoCADCivil</RootNamespace>
+    <AssemblyName>AutoCAD+Civil</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <OutputPath>bin2020\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Обратное исключение: не подхватывать bin\/obj\ (net8.0-сборка AutoCAD+Civil.csproj). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Версионно-специфичные сборки AutoCAD 2020 — на этой машине нет установленного
+         AutoCAD 2020 (см. переписку по разработке: папка "AutoCAD 2020" в Program Files
+         пустая, только служебный AcVba.arx от старой установки), поэтому 4 файла нужно
+         скопировать сюда вручную с машины, где AutoCAD 2020 установлен целиком:
+         acmgd.dll, acdbmgd.dll, accoremgd.dll, AdWindows.dll — положить их в
+         "C:\Users\User\Downloads\AutoCAD 2020\" (папка уже создана). Private=False — не
+         копируются в выходную папку (см. пояснение в AutoCAD+Civil.csproj), AutoCAD резолвит
+         их из уже загруженных в своём процессе версий. -->
+    <Reference Include="accoremgd">
+      <HintPath>C:\Users\User\Downloads\AutoCAD 2020\accoremgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>C:\Users\User\Downloads\AutoCAD 2020\acdbmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="acmgd">
+      <HintPath>C:\Users\User\Downloads\AutoCAD 2020\acmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="AdWindows">
+      <HintPath>C:\Users\User\Downloads\AutoCAD 2020\AdWindows.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Плагин AutoCAD .NET (ObjectARX managed API) — отдельный, независимый от Revit проект
+       в своей подпапке репозитория, не входит в DAN_Plugin.sln. Собирается в DLL, которая
+       грузится в AutoCAD через NETLOAD (или автозагрузку из ApplicationPlugins). AutoCAD 2025
+       перешёл на .NET 8 (подтверждено по acdbmgd.runtimeconfig.json рядом с DLL — tfm net8.0,
+       Microsoft.NETCore.App/WindowsDesktop.App 8.0.0), поэтому TargetFramework тот же, что и у
+       DAN_Plugin2026.csproj для Revit 2026. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms> <!-- диалог "Обновить/Создать новую" -->
+    <UseWPF>true</UseWPF> <!-- иконки ленты рисуются в коде через DrawingVisual/RenderTargetBitmap -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>AutoCADCivil</RootNamespace>
+    <AssemblyName>AutoCAD+Civil</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <!-- AutoCAD+Civil2020.csproj (net48, сборка под AutoCAD 2020) живёт в этой же папке и
+         делит с этим проектом исходники (BlockTableCommand.cs/RibbonSetup.cs) через обычный
+         автоглоб — это НАМЕРЕННО. Но её собственные bin2020\/obj2020\ нужно исключить, иначе
+         автоглоб этого (net8.0) проекта подхватит её сгенерированные .g.cs/AssemblyInfo. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin2020\**;obj2020\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=False — сборки AutoCAD НЕ копируются в выходную папку: при загрузке плагина
+         через NETLOAD/ApplicationPlugins AutoCAD резолвит их из уже загруженных в своём
+         процессе версий, а копия рядом с плагином может конфликтовать (другая версия/сборка
+         с тем же именем, но не той, что реально исполняется). -->
+    <Reference Include="accoremgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2025\accoremgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2025\acdbmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="acmgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2025\acmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="AdWindows">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2025\AdWindows.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

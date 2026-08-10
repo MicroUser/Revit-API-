@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+                     AutodeskProduct="AutoCAD"
+                     Name="AutoCAD+Civil"
+                     Description="Ведомость блоков МАФ (BLOCKTABLE) и подготовка блоков (MAFCONVERT)"
+                     AppVersion="1.0.0"
+                     Author="Revit-API--Develop"
+                     ProductCode="{2A7AF252-7905-47C7-940D-BE6558F48570}"
+                     UpgradeCode="{1237B2CA-F4A4-496B-9D6D-3669CCD59BEE}"
+                     Icon="./Contents/icon.ico">
+  <CompanyDetails Name="" Url="" Email="" />
+  <!-- Схема AutoCAD 2025: RuntimeRequirements — ВНУТРИ ComponentEntry (не рядом с ним, как у
+       старых Revit-бандлов), ComponentEntry обязан иметь AppType=".Net", и с 2025 версии
+       автозагрузчик ТРЕБУЕТ SeriesMin/SeriesMax для .NET-приложений — без них автозагрузка
+       тихо не срабатывает (подтверждено официальным постом Autodesk Developer Blog,
+       "AutoCAD 2025: Update Your PackageContents.xml with RuntimeRequirements"). R25.0 —
+       внутренний номер релиза AutoCAD 2025, R23.1 — AutoCAD 2020. Официальный пример
+       Autodesk для мультиверсионных .NET-плагинов — именно ДВА ComponentEntry с разными
+       ModuleName (net8.0- и net48-сборка) и разными SeriesMin/SeriesMax — тот же паттерн
+       здесь. AutoCAD сам выбирает подходящий ComponentEntry по своей версии при старте. -->
+  <Components Description="AutoCAD+Civil">
+    <ComponentEntry AppName="AutoCAD+Civil"
+                     ModuleName="./Contents/2025/AutoCAD+Civil.dll"
+                     AppType=".Net"
+                     AppDescription="Ведомость блоков МАФ (BLOCKTABLE) и подготовка блоков (MAFCONVERT)"
+                     LoadOnAutoCADStartup="True">
+      <RuntimeRequirements OS="Win64" SeriesMin="R25.0" SeriesMax="R25.0" />
+    </ComponentEntry>
+    <ComponentEntry AppName="AutoCAD+Civil"
+                     ModuleName="./Contents/2020/AutoCAD+Civil.dll"
+                     AppType=".Net"
+                     AppDescription="Ведомость блоков МАФ (BLOCKTABLE) и подготовка блоков (MAFCONVERT)"
+                     LoadOnAutoCADStartup="True">
+      <RuntimeRequirements OS="Win64" SeriesMin="R23.1" SeriesMax="R23.1" />
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

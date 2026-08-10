@@ -286,6 +286,30 @@ namespace LiraDxfExporter
             return null;
         }
 
+        /// <summary>Ждёт, пока файл path не откроется на чтение БЕЗ шаринга (FileShare.None) —
+        /// то есть пока писавший его процесс (диалог сохранения ЛИРА-САПР) не закроет свой
+        /// хэндл. File.Exists становится true уже в момент создания файла, а не после того, как
+        /// запись/сброс буфера завершены, поэтому его одного недостаточно для гарантии, что файл
+        /// готов к чтению. Опрос вместо однократной проверки: файловые события (FileSystemWatcher)
+        /// здесь избыточны для короткого, разового ожидания.</summary>
+        private static bool WaitUntilFileIsReadable(string path, TimeSpan timeout)
+        {
+            var sw = Stopwatch.StartNew();
+            while (sw.Elapsed < timeout)
+            {
+                try
+                {
+                    using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None)) { }
+                    return true;
+                }
+                catch (IOException)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+            return false;
+        }
+
         /// <summary>Заполняет поле имени файла и жмёт "Сохранить" в диалоге сохранения.
         /// Подтверждено вживую через Accessibility Insights: поле — "поле со списком 'Имя файла:'"
         /// (ControlType.ComboBox), а НЕ обычный Edit с AutomationId="1148" (это оказалось неверным
@@ -381,6 +405,15 @@ namespace LiraDxfExporter
                     Thread.Sleep(250);
                 if (!File.Exists(tempPath))
                     throw new InvalidOperationException($"[{label}] Файл не появился на диске за 15 сек после нажатия \"Сохранить\".");
+
+                // File.Exists становится true уже в момент СОЗДАНИЯ файла — ЛИРА-САПР в этот
+                // момент может ещё дописывать/сбрасывать буфер и держать файл открытым
+                // эксклюзивно. Если сразу читать (DxfDocument.Load), получаем "процесс не может
+                // получить доступ к файлу, так как он используется другим процессом" — ждём,
+                // пока файл не откроется хотя бы на чтение БЕЗ шаринга (FileShare.None), это и
+                // значит, что писатель его отпустил.
+                if (!WaitUntilFileIsReadable(tempPath, TimeSpan.FromSeconds(15)))
+                    throw new InvalidOperationException($"[{label}] Файл сохранён, но остаётся занят другим процессом дольше 15 сек.");
 
                 log($"[{label}] Чищу DXF...");
                 var summary = DxfCleanerCore.Clean(tempPath);

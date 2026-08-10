@@ -23,12 +23,13 @@
          обязан быть выставлен до импорта Microsoft.Common.props (см. MSB3540). -->
     <!-- Автоглоб по умолчанию исключает только obj2026\/bin2026\ (свои) — старые
          obj\/bin\ (сгенерированные .g.cs от net48-сборки DAN_Plugin.csproj) нужно
-         исключить явно, иначе их подхватывает как дублирующие исходники. DxfCleaner\ и
-         LiraDxfExporter\ — отдельные, независимые от Revit проекты в своих подпапках
-         репозитория (см. их .csproj) — тоже WPF (App.xaml/MainWindow.xaml), и без явного
-         исключения автоглоб подхватывает их исходники сюда же, давая дублирующиеся
-         классы App/MainWindow при сборке. -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**;obj2026\**;bin2026\**;DxfCleaner\**;LiraDxfExporter\**</DefaultItemExcludes>
+         исключить явно, иначе их подхватывает как дублирующие исходники. DxfCleaner\,
+         LiraDxfExporter\ и AutoCAD+Civil\ — отдельные, независимые от Revit проекты в своих
+         подпапках репозитория (см. их .csproj) — без явного исключения автоглоб подхватывает
+         их исходники сюда же (для DxfCleaner/LiraDxfExporter это давало дублирующиеся классы
+         App/MainWindow; AutoCAD+Civil ссылается на Autodesk.AutoCAD.* — этих сборок тут нет,
+         был бы CS0246). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**;obj2026\**;bin2026\**;DxfCleaner\**;LiraDxfExporter\**;AutoCAD+Civil\**</DefaultItemExcludes>
     <!-- Revit грузит DLL напрямую (не через "dotnet"), .deps.json он не читает — без этого
          NuGet-зависимости (System.Drawing.Common, System.Resources.Extensions) не попадают
          в выходную папку физически, и плагин упадёт при первом обращении к этим типам. -->

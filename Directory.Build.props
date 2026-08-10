@@ -11,4 +11,12 @@
     <BaseIntermediateOutputPath>obj2026\</BaseIntermediateOutputPath>
     <MSBuildProjectExtensionsPath>obj2026\</MSBuildProjectExtensionsPath>
   </PropertyGroup>
+
+  <!-- Тот же приём для AutoCAD+Civil2020.csproj (net48) — делит папку AutoCAD+Civil\ с
+       AutoCAD+Civil.csproj (net8.0-windows, AutoCAD 2025), которые без этого делили бы
+       общую "obj\" и ломали restore друг друга (см. комментарий выше про MSB3540). -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('2020'))">
+    <BaseIntermediateOutputPath>obj2020\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>obj2020\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
 </Project>

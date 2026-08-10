@@ -364,3 +364,6 @@ FodyWeavers.xsd
 # .NET 8 (Revit 2026) build output
 obj2026/
 bin2026/
+# .NET Framework 4.8 (AutoCAD 2020) build output — AutoCAD+Civil2020.csproj
+obj2020/
+bin2020/
