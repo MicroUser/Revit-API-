@@ -160,24 +160,28 @@ namespace LiraToRevit.Rebar
             double mid = RebarUnits.ToMm((band.Across1 + band.Across2) / 2.0);
             slab.ClipAlong(z.Dir, ref p1, ref p2, mid, _s.EndOffset, out clipped1, out clipped2);
 
-            // — отметка стержня по толщине —
-            double zBar = _builder.BarElevation(slab, z);
-
             // Ровно один торец обрезан краем плиты/отверстия (оба сразу — уже отсеяно ниже,
             // при обоих clipped распределить добавку по стандартной длине некуда) и это верхняя
             // допка — вместо прямого стержня с обрезкой строим Г- или П-образный (реальный загиб,
             // а не текстовая пометка "требуется загиб"). Для фундаментов (AlwaysStraight) загиб не
-            // делаем вообще — там стержни всегда прямые.
-            bool bendable = !_s.AlwaysStraight && z.Face == Face.Top && (clipped1 ^ clipped2) && _lShape != null;
+            // делаем вообще — там стержни всегда прямые. Глобальный BendTopBars=false — то же самое,
+            // но по явному выбору пользователя в "⚙ Настройки", а не по категории элемента, и главнее
+            // формы отдельной зоны (см. PlacementSettings.BendTopBars). Явный выбор ЭТОЙ зоны
+            // (z.ShapeMode=Straight — карточка зоны) тоже отключает гибку только для неё. Нужная
+            // форма (или хотя бы Г — запасной вариант для Auto) должна существовать в проекте,
+            // иначе, как и раньше, стержень остаётся прямым с обрезкой.
+            bool shapeAvailable = z.ShapeMode == TopBarShapeMode.UShape ? _uShape != null : _lShape != null;
+            bool bendable = !_s.AlwaysStraight && _s.BendTopBars && z.ShapeMode != TopBarShapeMode.Straight
+                && z.Face == Face.Top && (clipped1 ^ clipped2) && shapeAvailable;
 
             if (bendable)
-                return PlaceBendableBand(host, slab, z, type, mark, p1, p2, clipped1, clipped2, first, zBar, count, step);
+                return PlaceBendableBand(host, slab, z, type, mark, p1, p2, clipped1, clipped2, first, count, step);
 
-            return PlaceStraightBand(host, z, type, mark, p1, p2, clipped1, clipped2, first, zBar, count, step);
+            return PlaceStraightBand(host, slab, z, type, mark, p1, p2, clipped1, clipped2, first, count, step);
         }
 
-        private List<PlacedBars> PlaceStraightBand(Floor host, ZoneDef z, RebarBarType type, string mark,
-            double p1, double p2, bool clipped1, bool clipped2, double first, double zBar, int count, double step)
+        private List<PlacedBars> PlaceStraightBand(Floor host, SlabGeometry slab, ZoneDef z, RebarBarType type, string mark,
+            double p1, double p2, bool clipped1, bool clipped2, double first, int count, double step)
         {
             var plans = _calculator.ComputeStraight(z, p1, p2, clipped1, clipped2);
 
@@ -185,27 +189,35 @@ namespace LiraToRevit.Rebar
             for (int i = 0; i < plans.Count; i++)
             {
                 var plan = plans[i];
-                var rebar = _builder.CreateStraightRebarElement(host, z, type, mark, plan, first, zBar, count, step);
-                _builder.AssignWorkset(rebar);
-                // При делении зоны на два стыкуемых внахлёст массива (plans.Count==2) второй
-                // (ближний к p2) массив сдвигается на 20мм поперёк — см. класс-док BarLengthCalculator.
-                if (plans.Count == 2 && i == 1) _builder.ApplyAcrossShift(rebar.Id, z.Dir);
-
-                result.Add(new PlacedBars
+                // "Лесенка" — на наклонной плите длинный массив поперёк уклона разбивается на
+                // несколько горизонтальных ступеней вместо одной общей отметки на весь массив,
+                // см. RebarBuilder.ComputeRungs.
+                var rungs = _builder.ComputeRungs(slab, z, plan.P1, plan.P2, first, step, count);
+                foreach (var rung in rungs)
                 {
-                    ZoneId = z.Id,
-                    TypeName = type.Name,
-                    Count = count,
-                    LengthMm = plan.LengthMm,
-                    NeedsHook = plan.NeedsHook,
-                    RebarId = rebar.Id
-                });
+                    var rebar = _builder.CreateStraightRebarElement(host, z, type, mark, plan, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
+                    _builder.AssignWorkset(rebar);
+                    // При делении зоны на два стыкуемых внахлёст массива (plans.Count==2) второй
+                    // (ближний к p2) массив сдвигается на 20мм поперёк — см. класс-док BarLengthCalculator.
+                    // Применяется к КАЖДОЙ ступени этой половины.
+                    if (plans.Count == 2 && i == 1) _builder.ApplyAcrossShift(rebar.Id, z.Dir);
+
+                    result.Add(new PlacedBars
+                    {
+                        ZoneId = z.Id,
+                        TypeName = type.Name,
+                        Count = rung.Count,
+                        LengthMm = plan.LengthMm,
+                        NeedsHook = plan.NeedsHook,
+                        RebarId = rebar.Id
+                    });
+                }
             }
             return result;
         }
 
         private List<PlacedBars> PlaceBendableBand(Floor host, SlabGeometry slab, ZoneDef z, RebarBarType type, string mark,
-            double p1, double p2, bool clipped1, bool clipped2, double first, double zBar, int count, double step)
+            double p1, double p2, bool clipped1, bool clipped2, double first, int count, double step)
         {
             // Анкеровка — только с дальней стороны (torec у кромки уже отдаёт анкеровку через
             // сам загиб, вторая анкеровка внахлёст не нужна): дальний торец сохраняет полный
@@ -217,38 +229,61 @@ namespace LiraToRevit.Rebar
 
             // Выбор формы (Г vs П) зависит только от места загиба (edgeNearAlong) — не от того,
             // делим ли зону на два массива или нет (при делении место загиба не меняется), поэтому
-            // решаем один раз здесь и переиспользуем в обеих ветках ниже.
-            bool useU = _uShape != null && _supportDetector.HasParallelSupport(slab, z.Dir, first, step, count, edgeNearAlong, zBar);
+            // решаем один раз здесь и переиспользуем в обеих ветках ниже. При явном выборе формы
+            // ЭТОЙ зоны (z.ShapeMode ≠ Auto — карточка зоны в редакторе) форма фиксирована и
+            // автодетект пилона/колонны (SupportDetector) не запускается вообще; UShape гарантированно
+            // доступна здесь — bendable выше уже отсеял случай отсутствующей формы.
+            // Z нужен только для сверки высоты опоры (SupportDetector) — берём худшую отметку по
+            // всему диапазону загиба (та же логика, что и для самого элемента), а не одну точку.
+            double acrossEnd = first + (count - 1) * step;
+            double zAtBend = _builder.BandZAt(slab, z, Math.Min(origFarAlong, edgeNearAlong), Math.Max(origFarAlong, edgeNearAlong), first, acrossEnd);
+            bool useU = z.ShapeMode == TopBarShapeMode.UShape ? true
+                : z.ShapeMode == TopBarShapeMode.LShape ? false
+                : _uShape != null && _supportDetector.HasParallelSupport(slab, z.Dir, first, step, count, edgeNearAlong, zAtBend);
             RebarShape shape = useU ? _uShape : _lShape;
             double noseTotalMm = useU ? (_s.UShapeDepthMm + _s.UShapeFootMm) : _s.LShapeNoseMm;
 
             if (_calculator.NeedsBentSplit(origFarAlong, edgeNearAlong))
             {
                 var split = _calculator.ComputeBentSplit(z, origFarAlong, edgeNearAlong, bendAtP2, noseTotalMm);
+                var result = new List<PlacedBars>();
 
-                var rebarA = _builder.CreateStraightRebarElement(host, z, type, mark, split.Far, first, zBar, count, step);
-                _builder.AssignWorkset(rebarA);
-
-                var rebarB = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, split.Near, first, zBar, count, step);
-                _builder.AssignWorkset(rebarB);
-                // Ближний (бендовый) массив сдвигается на 20мм поперёк — см. класс-док BarLengthCalculator.
-                _builder.ApplyAcrossShift(rebarB.Id, z.Dir);
-
-                return new List<PlacedBars>
+                var farRungs = _builder.ComputeRungs(slab, z, split.Far.P1, split.Far.P2, first, step, count);
+                foreach (var rung in farRungs)
                 {
-                    new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = count, LengthMm = split.Far.LengthMm, NeedsHook = split.Far.NeedsHook, RebarId = rebarA.Id },
-                    new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = count, LengthMm = split.Near.TotalLenMm, NeedsHook = false, RebarId = rebarB.Id }
-                };
+                    var rebarA = _builder.CreateStraightRebarElement(host, z, type, mark, split.Far, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
+                    _builder.AssignWorkset(rebarA);
+                    result.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = split.Far.LengthMm, NeedsHook = split.Far.NeedsHook, RebarId = rebarA.Id });
+                }
+
+                double nearAlong1 = Math.Min(split.Near.FarAlong, split.Near.NearAlong);
+                double nearAlong2 = Math.Max(split.Near.FarAlong, split.Near.NearAlong);
+                var nearRungs = _builder.ComputeRungs(slab, z, nearAlong1, nearAlong2, first, step, count);
+                foreach (var rung in nearRungs)
+                {
+                    var rebarB = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, split.Near, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
+                    _builder.AssignWorkset(rebarB);
+                    // Ближний (бендовый) массив сдвигается на 20мм поперёк — см. класс-док
+                    // BarLengthCalculator. Применяется к КАЖДОЙ его ступени.
+                    _builder.ApplyAcrossShift(rebarB.Id, z.Dir);
+                    result.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = split.Near.TotalLenMm, NeedsHook = false, RebarId = rebarB.Id });
+                }
+
+                return result;
             }
 
             var plan = _calculator.ComputeBent(z, origFarAlong, edgeNearAlong, bendAtP2, noseTotalMm);
-            var rebar = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, plan, first, zBar, count, step);
-            _builder.AssignWorkset(rebar);
-
-            return new List<PlacedBars>
+            double bentAlong1 = Math.Min(origFarAlong, edgeNearAlong);
+            double bentAlong2 = Math.Max(origFarAlong, edgeNearAlong);
+            var bentRungs = _builder.ComputeRungs(slab, z, bentAlong1, bentAlong2, first, step, count);
+            var bentResult = new List<PlacedBars>();
+            foreach (var rung in bentRungs)
             {
-                new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = count, LengthMm = plan.TotalLenMm, NeedsHook = false, RebarId = rebar.Id }
-            };
+                var rebar = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, plan, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
+                _builder.AssignWorkset(rebar);
+                bentResult.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = plan.TotalLenMm, NeedsHook = false, RebarId = rebar.Id });
+            }
+            return bentResult;
         }
     }
 }

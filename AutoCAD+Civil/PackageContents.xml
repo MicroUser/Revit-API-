@@ -2,8 +2,8 @@
 <ApplicationPackage SchemaVersion="1.0"
                      AutodeskProduct="AutoCAD"
                      Name="AutoCAD+Civil"
-                     Description="Ведомость блоков МАФ (BLOCKTABLE) и подготовка блоков (MAFCONVERT)"
-                     AppVersion="1.0.0"
+                     Description="Ведомость блоков МАФ (BLOCKTABLE), подготовка блоков (MAFCONVERT), ведомость площадей по штриховкам (HATCHTABLE) и условные обозначения (HATCHLEGEND)"
+                     AppVersion="2.1"
                      Author="Revit-API--Develop"
                      ProductCode="{2A7AF252-7905-47C7-940D-BE6558F48570}"
                      UpgradeCode="{1237B2CA-F4A4-496B-9D6D-3669CCD59BEE}"
@@ -22,14 +22,14 @@
     <ComponentEntry AppName="AutoCAD+Civil"
                      ModuleName="./Contents/2025/AutoCAD+Civil.dll"
                      AppType=".Net"
-                     AppDescription="Ведомость блоков МАФ (BLOCKTABLE) и подготовка блоков (MAFCONVERT)"
+                     AppDescription="Ведомость блоков МАФ (BLOCKTABLE), подготовка блоков (MAFCONVERT), ведомость площадей по штриховкам (HATCHTABLE) и условные обозначения (HATCHLEGEND)"
                      LoadOnAutoCADStartup="True">
       <RuntimeRequirements OS="Win64" SeriesMin="R25.0" SeriesMax="R25.0" />
     </ComponentEntry>
     <ComponentEntry AppName="AutoCAD+Civil"
                      ModuleName="./Contents/2020/AutoCAD+Civil.dll"
                      AppType=".Net"
-                     AppDescription="Ведомость блоков МАФ (BLOCKTABLE) и подготовка блоков (MAFCONVERT)"
+                     AppDescription="Ведомость блоков МАФ (BLOCKTABLE), подготовка блоков (MAFCONVERT), ведомость площадей по штриховкам (HATCHTABLE) и условные обозначения (HATCHLEGEND)"
                      LoadOnAutoCADStartup="True">
       <RuntimeRequirements OS="Win64" SeriesMin="R23.1" SeriesMax="R23.1" />
     </ComponentEntry>

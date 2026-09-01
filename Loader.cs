@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -26,16 +27,49 @@ namespace MyPlugin.Loader
         {
             PluginDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             CleanOldTempFiles();
+            // Синхронизация с сетевой шарой (см. UpdateSync) — до SetupRibbon, чтобы
+            // DAN_Plugin.dll успел обновиться раньше, чем пользователь нажмёт любую кнопку.
+            UpdateSync.Run(a.ControlledApplication.VersionNumber);
+            // Вкладку нужно создать до первого CreateRibbonPanel — иначе панель
+            // молча не создастся (CreateRibbonPanel кинет исключение "вкладка не найдена",
+            // проглоченное try/catch внутри SetupVersionPanel/SetupRibbon).
+            try { a.CreateRibbonTab(RibbonTabName); } catch { }
+            SetupVersionPanel(a);
             SetupRibbon(a);
             return Result.Succeeded;
         }
 
         public Result OnShutdown(UIControlledApplication a) => Result.Succeeded;
 
+        // Отдельная панель с номером версии — не мешает панели "КЖ", открывает статус
+        // обновления по клику (см. ProxyVersionInfoCommand).
+        private static void SetupVersionPanel(UIControlledApplication a)
+        {
+            try
+            {
+                RibbonPanel panel = a.CreateRibbonPanel(RibbonTabName, "Версия");
+                string path = Assembly.GetExecutingAssembly().Location;
+                string label = UpdateSync.IsCached
+                    ? $"v{UpdateSync.CurrentVersion}\n(нет связи)"
+                    : $"v{UpdateSync.CurrentVersion}";
+
+                var btn = (PushButton)panel.AddItem(new PushButtonData(
+                    "VersionInfo", label, path,
+                    "MyPlugin.Loader.ProxyVersionInfoCommand")
+                {
+                    ToolTip = UpdateSync.IsCached
+                        ? "Не удалось подключиться к серверу обновлений — используется локальная копия. Нажмите для подробностей."
+                        : "Версия плагина синхронизирована с сервером. Нажмите для подробностей."
+                });
+                btn.LargeImage = LoadIcon("version-control_32.png");
+                btn.Image      = LoadIcon("version-control_16.png");
+            }
+            catch { }
+        }
+
         private static void SetupRibbon(UIControlledApplication a)
         {
-            try { a.CreateRibbonTab(RibbonTabName); } catch { }
-
+            // Вкладка уже создана в OnStartup (до SetupVersionPanel).
             RibbonPanel panel = a.CreateRibbonPanel(RibbonTabName, "КЖ");
             string path = Assembly.GetExecutingAssembly().Location;
 
@@ -142,6 +176,106 @@ namespace MyPlugin.Loader
                     try { File.Delete(f); } catch { }
             }
             catch { }
+        }
+    }
+
+    // Синхронизация с эталонной копией плагина на сетевой шаре — вызывается один раз при
+    // старте Revit (LoaderApp.OnStartup), до создания ленты. Источник правды —
+    // K:\02_BIM\DAN_Plugin\<версия Revit>\ (структура файлов = как в Installer/*.iss:
+    // *.dll, checklist.html и т.д. прямо в этой папке) + version.txt с номером версии,
+    // который проставляется вручную при публикации (см. Installer/Publish*.ps1).
+    //
+    // Перезаписывает содержимое LoaderApp.PluginDir — КРОМЕ самого Loader.dll: это уже
+    // загруженная Revit'ом сборка (OnStartup выполняется из её же кода), и на практике
+    // подтверждено, что пока Revit открыт, Windows держит такой файл заблокированным
+    // ("Папка уже используется"). DAN_Plugin.dll в эту блокировку не попадает, т.к. Revit
+    // его напрямую не грузит — HotLoader ниже всегда копирует его во временный файл перед
+    // загрузкой, поэтому оригинал свободен для перезаписи в любой момент.
+    //
+    // Из-за этого обновление самого Loader.dll (новые кнопки на ленте, правки в этом же
+    // файле) через живую синхронизацию невозможно — для таких изменений нужна обычная
+    // переустановка (см. Installer/Build*.ps1) при закрытом Revit. Обновления в
+    // DAN_Plugin.dll (бизнес-логика команд — основная масса правок) применяются мгновенно.
+    //
+    // Если шара недоступна (нет сети/сервер выключен) — тихо продолжаем работать на
+    // локальной копии, IsCached=true отражается в кнопке версии на ленте.
+    internal static class UpdateSync
+    {
+        private const string ServerRoot = @"K:\02_BIM\DAN_Plugin";
+        private const int TimeoutMs = 3000;
+
+        public static string CurrentVersion { get; private set; } = "?";
+        public static bool IsCached { get; private set; }
+        public static string Detail { get; private set; } = "";
+
+        public static void Run(string revitVersionNumber)
+        {
+            string localVersionFile = Path.Combine(LoaderApp.PluginDir, "version.txt");
+            bool synced;
+            string error = null;
+            try
+            {
+                Task<bool> task = Task.Run(() => TrySync(revitVersionNumber, localVersionFile));
+                synced = task.Wait(TimeoutMs) && task.Result;
+            }
+            catch (Exception ex)
+            {
+                synced = false;
+                error = ex.Message;
+            }
+
+            CurrentVersion = File.Exists(localVersionFile) ? File.ReadAllText(localVersionFile).Trim() : "?";
+            IsCached = !synced;
+            Detail = synced
+                ? $"Синхронизировано с сервером обновлений {DateTime.Now:dd.MM.yyyy HH:mm}."
+                : "Не удалось подключиться к серверу обновлений (" + ServerRoot + ") — " +
+                  "используется последняя загруженная версия." + (error != null ? "\n\n" + error : "");
+        }
+
+        private static bool TrySync(string revitVersionNumber, string localVersionFile)
+        {
+            string serverDir = Path.Combine(ServerRoot, revitVersionNumber);
+            string serverVersionFile = Path.Combine(serverDir, "version.txt");
+            if (!File.Exists(serverVersionFile)) return false;
+
+            string serverVersion = File.ReadAllText(serverVersionFile).Trim();
+            string localVersion = File.Exists(localVersionFile) ? File.ReadAllText(localVersionFile).Trim() : null;
+            if (serverVersion == localVersion) return true; // уже актуально, копировать не нужно
+
+            CopyDirectory(serverDir, LoaderApp.PluginDir);
+            return true;
+        }
+
+        private static void CopyDirectory(string src, string dst)
+        {
+            Directory.CreateDirectory(dst);
+            foreach (string file in Directory.GetFiles(src))
+            {
+                string name = Path.GetFileName(file);
+                // Loader.dll заблокирован Windows, пока Revit открыт (см. комментарий
+                // над классом) — обновляется только переустановкой, не трогаем его здесь.
+                if (string.Equals(name, "Loader.dll", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try { File.Copy(file, Path.Combine(dst, name), true); }
+                catch { /* файл временно занят (антивирус и т.п.) — пропускаем, попробуем в следующий раз */ }
+            }
+            foreach (string dir in Directory.GetDirectories(src))
+                CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+        }
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    [Regeneration(RegenerationOption.Manual)]
+    public class ProxyVersionInfoCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
+        {
+            TaskDialog.Show("DAN Plugin — версия",
+                $"Версия: {UpdateSync.CurrentVersion}\n" +
+                $"Статус: {(UpdateSync.IsCached ? "локальная копия (нет связи с сервером)" : "синхронизировано с сервером")}\n\n" +
+                UpdateSync.Detail);
+            return Result.Succeeded;
         }
     }
 

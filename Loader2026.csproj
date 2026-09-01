@@ -2,7 +2,7 @@
 
   <!-- Параллельная сборка Loader под Revit 2026 (.NET 8) — Loader.csproj (net48, 2023) не трогается. -->
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
@@ -57,6 +57,8 @@
     <EmbeddedResource Include="Resources\checklist_16.png" />
     <EmbeddedResource Include="Resources\pencil_32.png" />
     <EmbeddedResource Include="Resources\pencil_16.png" />
+    <EmbeddedResource Include="Resources\version-control_32.png" />
+    <EmbeddedResource Include="Resources\version-control_16.png" />
   </ItemGroup>
 
   <!-- Dev-деплой отключён по просьбе — падал с ошибкой "занят другим приложением", когда

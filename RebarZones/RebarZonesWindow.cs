@@ -110,7 +110,16 @@ namespace LiraToRevit.Rebar
 
             core.NavigationCompleted += OnNavigationCompleted;
             core.WebMessageReceived += OnWebMessage;
-            core.Navigate("https://rebarzones.assets/rebar_zones.html");
+            // Профиль WebView2 (userData выше) — постоянная папка на диске, переживает и это окно,
+            // и сам Revit: Chromium кэширует ресурсы, отданные через SetVirtualHostNameToFolderMapping,
+            // как обычные HTTP-ресурсы и может годами отдавать старую версию файла из disk cache,
+            // даже когда сам rebar_zones.html на диске уже пересобран. ?v=<mtime файла> делает URL
+            // РАЗНЫМ при каждом изменении файла — кэш по такому URL просто ни разу не совпадает,
+            // без необходимости чистить сам профиль или отключать кэш целиком.
+            string cacheBust;
+            try { cacheBust = File.GetLastWriteTimeUtc(Path.Combine(_assetFolder, "rebar_zones.html")).Ticks.ToString(); }
+            catch { cacheBust = DateTime.UtcNow.Ticks.ToString(); }
+            core.Navigate("https://rebarzones.assets/rebar_zones.html?v=" + cacheBust);
         }
 
         private async void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
@@ -129,6 +138,8 @@ namespace LiraToRevit.Rebar
             if (msg.StartsWith("loaddxf:")) { LoadDxfRequested(msg.Substring("loaddxf:".Length)); return; }
             if (msg.StartsWith("resetplaced:")) { ResetPlaced(msg.Substring("resetplaced:".Length)); return; }
             if (msg.StartsWith("anchorset:")) { AnchorSettingsChanged(msg.Substring("anchorset:".Length)); return; }
+            if (msg.StartsWith("topbendset:")) { TopBendSettingChanged(msg.Substring("topbendset:".Length)); return; }
+            if (msg.StartsWith("bgset:")) { BgSettingsChanged(msg.Substring("bgset:".Length)); return; }
         }
 
         /// <summary>Коэффициент/построчные длины анкеровки поправлены в окне "Настройки" (см.
@@ -142,6 +153,34 @@ namespace LiraToRevit.Rebar
         {
             if (string.IsNullOrEmpty(rawJson)) return;
             _bridge.Run(app => RebarZonesDataStore.SaveAnchorSettingsJson(app.ActiveUIDocument.Document, rawJson));
+        }
+
+        /// <summary>Смена глобального переключателя "Загнутые/Прямые верхние стержни" в
+        /// "⚙ Настройки" (rebar_zones.html BEND_TOP) — сохраняем как есть, по образцу
+        /// AnchorSettingsChanged выше, чтобы при следующем открытии редактор восстановил
+        /// выбранный режим (см. RebarZonesCommand.BuildInitJson). Форма конкретной зоны (П/Г) —
+        /// отдельно, часть самой зоны (см. JsZone.Shape), сюда не попадает.</summary>
+        private void TopBendSettingChanged(string rawJson)
+        {
+            if (string.IsNullOrEmpty(rawJson)) return;
+            _bridge.Run(app => RebarZonesDataStore.SaveTopBendJson(app.ActiveUIDocument.Document, rawJson));
+        }
+
+        /// <summary>Смена диаметра/шага фоновой арматуры в "⚙ Настройки" (rebar_zones.html
+        /// BGd/BGs, для фундаментов — BGdTop/BGsTop/BGdBottom/BGsBottom) — сохраняем per-floor (у
+        /// разных плит фон может отличаться, в отличие от анкеровки/переключателя загиба выше),
+        /// чтобы фон не сбрасывался на дефолтные 10мм при следующем открытии ИМЕННО этой плиты
+        /// (см. RebarZonesCommand.BuildInitJson).</summary>
+        private void BgSettingsChanged(string rawJson)
+        {
+            if (string.IsNullOrEmpty(rawJson)) return;
+            _bridge.Run(app =>
+            {
+                var doc = app.ActiveUIDocument.Document;
+                var floor = doc.GetElement(_floorId) as Floor;
+                if (floor == null) return;
+                RebarZonesDataStore.SaveBgSettingsJson(doc, floor, rawJson);
+            });
         }
 
         /// <summary>Кнопка "Сбросить память размещения" (окно настроек, за паролем в JS) —
@@ -229,19 +268,26 @@ namespace LiraToRevit.Rebar
             List<JsZone> jsZones;
             Face face; Dir dir;
             Dictionary<int, double> anchorOverride = null;
+            bool bendTopBars = true;
             try
             {
-                // Сообщение — {"face":"top"|"bottom","dir":"x"|"y","zones":[...],"la":{...}}:
-                // грань/направление берём из САМОГО сообщения (текущая вкладка редактора на момент
-                // клика), а не из initJson окна — при нескольких загруженных DXF на плиту (см.
-                // RebarZonesCommand) окно уже не привязано к одной-единственной комбинации
-                // грань+направление.
+                // Сообщение — {"face":"top"|"bottom","dir":"x"|"y","zones":[...],"la":{...},
+                // "bendTop":true|false}: грань/направление берём из САМОГО сообщения (текущая
+                // вкладка редактора на момент клика), а не из initJson окна — при нескольких
+                // загруженных DXF на плиту (см. RebarZonesCommand) окно уже не привязано к
+                // одной-единственной комбинации грань+направление. Форма (П/Г/Авто/Прямая)
+                // отдельной зоны — часть самой зоны (см. JsZone.Shape/ZoneDef.ShapeMode), не
+                // здесь; bendTop — только общий переключатель, который её перекрывает.
                 using (var doc = System.Text.Json.JsonDocument.Parse(payloadJson))
                 {
                     var root = doc.RootElement;
                     face = root.GetProperty("face").GetString() == "bottom" ? Face.Bottom : Face.Top;
                     dir = root.GetProperty("dir").GetString() == "y" ? Dir.Y : Dir.X;
                     jsZones = JsZone.ParseArray(root.GetProperty("zones"));
+
+                    if (root.TryGetProperty("bendTop", out var bendEl) &&
+                        (bendEl.ValueKind == System.Text.Json.JsonValueKind.True || bendEl.ValueKind == System.Text.Json.JsonValueKind.False))
+                        bendTopBars = bendEl.GetBoolean();
 
                     // Текущая (возможно, настроенная пользователем — см. AnchorSettingsChanged)
                     // длина анкеровки по диаметрам: применяется к PlacementSettings.Anchorage ниже,
@@ -332,6 +378,11 @@ namespace LiraToRevit.Rebar
                         // зашитым по умолчанию 55d, хотя редактор уже показывает другие значения.
                         if (anchorOverride != null)
                             foreach (var kv in anchorOverride) settings.Anchorage[kv.Key] = kv.Value;
+                        // Глобальный переключатель "Загнутые/Прямые верхние стержни" из
+                        // "⚙ Настройки" (см. TopBendSettingChanged) — форма конкретной зоны
+                        // (П/Г/Авто) приходит отдельно, в самих zones (см. ниже ToZoneDef); для
+                        // фундамента AlwaysStraight всё равно перекрывает и то, и другое.
+                        settings.BendTopBars = bendTopBars;
                         if (isFoundation)
                         {
                             settings.TypeNameTemplate = "(арматура)фундамент_доп_{F}{D}_d={d}_А500";
@@ -439,10 +490,19 @@ namespace LiraToRevit.Rebar
         public double Am;
         public string How;
         public double BgD;   // диаметр фоновой (основной) арматуры, мм — см. PlacementSettings.FirstLayerThickness
+        public string Shape; // "auto"/"u"/"l"/"straight" — форма загиба ЭТОЙ зоны, см. ZoneDef.ShapeMode
         public System.Collections.Generic.List<(double X, double Y)> Poly;
 
         public ZoneDef ToZoneDef(Face face, Dir dir)
         {
+            TopBarShapeMode shapeMode;
+            switch (Shape)
+            {
+                case "u": shapeMode = TopBarShapeMode.UShape; break;
+                case "l": shapeMode = TopBarShapeMode.LShape; break;
+                case "straight": shapeMode = TopBarShapeMode.Straight; break;
+                default: shapeMode = TopBarShapeMode.Auto; break;
+            }
             return new ZoneDef
             {
                 Id = Id,
@@ -454,6 +514,7 @@ namespace LiraToRevit.Rebar
                 AsCalc = Am,
                 Source = How,
                 Accepted = true,
+                ShapeMode = shapeMode,
                 Polygon = Poly.Select(p => new XYZ(
                     UnitUtils.ConvertToInternalUnits(p.X, UnitTypeId.Meters),
                     UnitUtils.ConvertToInternalUnits(p.Y, UnitTypeId.Meters),
@@ -463,8 +524,9 @@ namespace LiraToRevit.Rebar
 
         /// <summary>
         /// Разбирает JSON-массив вида [{"id":"..","k":1,"d":10,"step":200,"avg":false,"am":4.4,
-        /// "how":"расчёт","poly":[[x,y],...]},...] без сторонних библиотек (System.Text.Json
-        /// не даёт удобного динамического доступа без DTO, а плоский формат здесь проще руками).
+        /// "how":"расчёт","shape":"auto","poly":[[x,y],...]},...] без сторонних библиотек
+        /// (System.Text.Json не даёт удобного динамического доступа без DTO, а плоский формат
+        /// здесь проще руками).
         /// Принимает уже разобранный JsonElement (массив) — вызывающий код (PlaceZones) сначала
         /// разбирает внешний конверт {"face":...,"dir":...,"zones":[...]}.
         /// </summary>
@@ -482,6 +544,7 @@ namespace LiraToRevit.Rebar
                     Am = el.GetProperty("am").GetDouble(),
                     How = el.TryGetProperty("how", out var howEl) ? howEl.GetString() : "расчёт",
                     BgD = el.TryGetProperty("bgD", out var bgDEl) ? bgDEl.GetDouble() : 10.0,
+                    Shape = el.TryGetProperty("shape", out var shapeEl) ? shapeEl.GetString() : "auto",
                     Poly = new System.Collections.Generic.List<(double, double)>()
                 };
                 foreach (var pt in el.GetProperty("poly").EnumerateArray())

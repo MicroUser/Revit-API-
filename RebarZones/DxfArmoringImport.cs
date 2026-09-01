@@ -108,7 +108,7 @@ namespace LiraToRevit.Rebar
                 list.Add(i);
             }
 
-            double minAs = double.MaxValue, maxAs = double.MinValue;
+            var allCells = new List<DxfCell>();
             foreach (var poly in faces)
             {
                 double cx = poly.Average(p => p.X), cy = poly.Average(p => p.Y);
@@ -117,23 +117,90 @@ namespace LiraToRevit.Rebar
                 int? hit = FindContaining(poly, texts, buckets, bucketFt, KeyOf);
                 if (hit == null) hit = FindNearest(cx, cy, texts, buckets, bucketFt, KeyOf);
 
-                if (hit != null)
+                if (hit != null) { cell.As = texts[hit.Value].Val; cell.HasValue = true; }
+                allCells.Add(cell);
+            }
+
+            // Один DXF-экспорт из ЛИРА может физически содержать мозаику НЕСКОЛЬКИХ смежных плит
+            // (например, основная плита + отдельно смоделированный пандус рядом) — тогда габарит
+            // всей мозаики оказывается больше, чем габарит ТОЙ ОДНОЙ плиты Revit, для которой этот
+            // файл выбран, и никакой сдвиг/привязка по габариту это не лечит (см. диагностику:
+            // площадь плиты и DXF совпадали по X, но не по Y — на плите примыкал отдельный пандус,
+            // смоделированный в ЛИРА другой плитой, но экспортированный в тот же файл). Ячейки
+            // разных физических плит в КЭ-сетке не имеют общих узлов (разные плиты не сшиты по
+            // границе) — оставляем только САМЫЙ КРУПНЫЙ (по площади) связный кластер ячеек, это и
+            // есть искомая плита; более мелкие отдельные кластеры отбрасываем.
+            var cells = LargestConnectedCluster(allCells);
+
+            double minAs = double.MaxValue, maxAs = double.MinValue;
+            foreach (var cell in cells)
+            {
+                if (cell.HasValue)
                 {
-                    cell.As = texts[hit.Value].Val;
-                    cell.HasValue = true;
                     if (cell.As < minAs) minAs = cell.As;
                     if (cell.As > maxAs) maxAs = cell.As;
                     res.Matched++;
                 }
-                else
-                {
-                    res.Unmatched++;
-                }
+                else res.Unmatched++;
                 res.Cells.Add(cell);
             }
             res.MinAs = res.Matched > 0 ? minAs : 0;
             res.MaxAs = res.Matched > 0 ? maxAs : 0;
             return res;
+        }
+
+        /// <summary>
+        /// Связные компоненты по ОБЩИМ ВЕРШИНАМ полигонов ячеек (допуск ~20мм — совпадающие узлы
+        /// соседних конечных элементов одной и той же плиты в сетке КЭ) — возвращает самый крупный
+        /// (по суммарной площади) компонент. Одна плита в непрерывной КЭ-сетке — всегда один связный
+        /// компонент (соседние элементы делят узлы по границе); отдельная физическая плита рядом
+        /// (не сшитая с этой по сетке) — свой, отдельный, обычно куда меньший компонент.
+        /// </summary>
+        private static List<DxfCell> LargestConnectedCluster(List<DxfCell> cells)
+        {
+            if (cells.Count <= 1) return cells;
+
+            double tolFt = FeetX(0.02); // ~20мм
+            (long, long) VKey(XYZ p) => ((long)Math.Round(p.X / tolFt), (long)Math.Round(p.Y / tolFt));
+
+            var byVertex = new Dictionary<(long, long), List<int>>();
+            for (int i = 0; i < cells.Count; i++)
+                foreach (var p in cells[i].Polygon)
+                {
+                    var k = VKey(p);
+                    if (!byVertex.TryGetValue(k, out var list)) byVertex[k] = list = new List<int>();
+                    list.Add(i);
+                }
+
+            var visited = new bool[cells.Count];
+            List<int> best = null;
+            double bestArea = -1;
+            for (int i = 0; i < cells.Count; i++)
+            {
+                if (visited[i]) continue;
+                var comp = new List<int>();
+                var stack = new Stack<int>();
+                stack.Push(i); visited[i] = true;
+                while (stack.Count > 0)
+                {
+                    int cur = stack.Pop();
+                    comp.Add(cur);
+                    foreach (var p in cells[cur].Polygon)
+                        foreach (var nb in byVertex[VKey(p)])
+                            if (!visited[nb]) { visited[nb] = true; stack.Push(nb); }
+                }
+                double area = comp.Sum(ci => PolyArea(cells[ci].Polygon));
+                if (area > bestArea) { bestArea = area; best = comp; }
+            }
+            return best.Count == cells.Count ? cells : best.Select(i => cells[i]).ToList();
+        }
+
+        private static double PolyArea(List<XYZ> p)
+        {
+            double s = 0;
+            for (int i = 0, j = p.Count - 1; i < p.Count; j = i++)
+                s += p[j].X * p[i].Y - p[i].X * p[j].Y;
+            return Math.Abs(s) / 2.0;
         }
 
         private static int? FindContaining(List<XYZ> poly, List<(double X, double Y, double Val)> texts,

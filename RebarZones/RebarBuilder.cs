@@ -54,7 +54,7 @@ namespace LiraToRevit.Rebar
             {
                 Line.CreateBound(PointOf(z.Dir, plan.P1, first, zBar), PointOf(z.Dir, plan.P2, first, zBar))
             };
-            var normal = z.Dir == Dir.X ? XYZ.BasisY : XYZ.BasisX;  // направление раскладки массива
+            var normal = z.Dir == Dir.X ? XYZ.BasisY : XYZ.BasisX;
             var rebar = Autodesk.Revit.DB.Structure.Rebar.CreateFromCurves(
                 _doc, RebarStyle.Standard, type, null, null, host,
                 normal, curves, RebarHookOrientation.Right, RebarHookOrientation.Right,
@@ -101,7 +101,7 @@ namespace LiraToRevit.Rebar
                 curves.Add(Line.CreateBound(depthPt, footPt));
             }
 
-            var arrayNormal = z.Dir == Dir.X ? XYZ.BasisY : XYZ.BasisX;  // направление раскладки массива
+            var arrayNormal = z.Dir == Dir.X ? XYZ.BasisY : XYZ.BasisX;
             var rebar = Autodesk.Revit.DB.Structure.Rebar.CreateFromCurvesAndShape(
                 _doc, shape, type, null, null, host, arrayNormal, curves,
                 RebarHookOrientation.Right, RebarHookOrientation.Right);
@@ -141,6 +141,11 @@ namespace LiraToRevit.Rebar
         /// имени параметра — на практике имя не гарантирует роль (см. диагностику: BI_A в форме
         /// 11 может быть носиком, а не основной длиной, и Revit сам их меняет местами при смене
         /// формы существующего стержня).
+        /// Параметр может оказаться read-only — семейство формы иногда вычисляет один из
+        /// размеров формулой по остальным/по геометрии переданных кривых (не по независимому
+        /// значению); Revit уже выставил его сам из curves в CreateFromCurvesAndShape, поэтому
+        /// такой параметр просто пропускаем, а не пытаемся перезаписать (иначе Parameter.Set
+        /// кидает "the parameter is read-only" и рушит всю транзакцию размещения).
         /// </summary>
         private static void FixShapeParams(Autodesk.Revit.DB.Structure.Rebar rebar, string[] paramNames, double[] targetMm)
         {
@@ -151,27 +156,131 @@ namespace LiraToRevit.Rebar
                 .ToList();
             var targetOrder = targetMm.OrderBy(v => v).ToList();
             for (int k = 0; k < order.Count && k < targetOrder.Count; k++)
-                pars[order[k]].Set(RebarUnits.Mm(targetOrder[k]));
+            {
+                var p = pars[order[k]];
+                if (p.IsReadOnly) continue;
+                p.Set(RebarUnits.Mm(targetOrder[k]));
+            }
         }
 
-        private static XYZ PointOf(Dir dir, double along, double across, double zMm) =>
-            dir == Dir.X ? new XYZ(RebarUnits.Mm(along), RebarUnits.Mm(across), RebarUnits.Mm(zMm))
-                         : new XYZ(RebarUnits.Mm(across), RebarUnits.Mm(along), RebarUnits.Mm(zMm));
+        /// <summary>Точка стержня в реальных (xMm,yMm) на заданной отметке zMm — один Z на весь
+        /// элемент (стержень прямой и горизонтальный), см. BandZAt.</summary>
+        private static XYZ PointOf(Dir dir, double along, double across, double zMm)
+        {
+            double xMm = dir == Dir.X ? along : across;
+            double yMm = dir == Dir.X ? across : along;
+            return new XYZ(RebarUnits.Mm(xMm), RebarUnits.Mm(yMm), RebarUnits.Mm(zMm));
+        }
+
+        /// <summary>4 угловые отметки ЗАДАННОЙ грани (без офсета арматуры) прямоугольника
+        /// along1..along2 × acrossFrom..acrossTo — общий геометрический хелпер для BandZAt
+        /// (своя грань z.Face) и ComputeRungs (своя грань — для проверки запаса на
+        /// ПРОТИВОПОЛОЖНОЙ). Та же along/across → x/y привязка, что и в PointOf.</summary>
+        private static double[] CornerZs(SlabGeometry slab, ZoneDef z, Face face,
+            double along1Mm, double along2Mm, double acrossFromMm, double acrossToMm)
+        {
+            double X(double along, double across) => z.Dir == Dir.X ? along : across;
+            double Y(double along, double across) => z.Dir == Dir.X ? across : along;
+            Func<double, double, double> f = face == Face.Top
+                ? (Func<double, double, double>)slab.TopZMmAt
+                : slab.BottomZMmAt;
+            return new[]
+            {
+                f(X(along1Mm, acrossFromMm), Y(along1Mm, acrossFromMm)),
+                f(X(along1Mm, acrossToMm),   Y(along1Mm, acrossToMm)),
+                f(X(along2Mm, acrossFromMm), Y(along2Mm, acrossFromMm)),
+                f(X(along2Mm, acrossToMm),   Y(along2Mm, acrossToMm)),
+            };
+        }
 
         /// <summary>
-        /// Отметка оси стержня. Защитный слой в типе плиты = 0, поэтому FaceOffset (35 мм)
-        /// отсчитывается до наружной грани. Доп. арматура считается лежащей рядом с фоновой
-        /// (основной) сеткой, а не на голой поверхности плиты — у фона тоже двухслойная сетка
-        /// X+Y толщиной FirstLayerThickness (диаметр фоновой арматуры, приходит из HTML):
-        /// направление FirstLayer (первый слой фона) — offset = FaceOffset + FirstLayerThickness/2 + d/2;
-        /// второе направление (лежит поверх ПЕРВОГО слоя фона целиком) — offset = FaceOffset + FirstLayerThickness + d/2.
+        /// Отметка оси ОДНОГО размещаемого элемента (одной "ступени" — band целиком или её
+        /// часть, см. ComputeRungs), выбранная так, чтобы защитный слой был ≥ норматива нигде не
+        /// проседал ниже — даже на наклонной плите. Плита — одна плоскость (см.
+        /// SlabGeometry.TopZMmAt/BottomZMmAt), поэтому экстремум отметки грани по прямоугольной
+        /// области, которую занимает элемент (along1..along2 × acrossFrom..acrossTo), всегда
+        /// достигается в одном из 4 углов (CornerFaceZs): берём Min по верхней грани (Face.Top —
+        /// худший, самый низкий угол верха) или Max по нижней грани (Face.Bottom — самый высокий
+        /// угол низа), затем один раз применяем офсет. На плоской плите (уклон=0) все 4 угла дают
+        /// одну отметку — вырожденный случай той же формулы, ничего не меняется относительно
+        /// плоских плит "как было".
+        /// Защитный слой в типе плиты = 0, поэтому FaceOffset (35 мм) отсчитывается до наружной
+        /// грани. Доп. арматура считается лежащей рядом с фоновой (основной) сеткой — у фона тоже
+        /// двухслойная сетка X+Y толщиной FirstLayerThickness (диаметр фоновой арматуры, приходит
+        /// из HTML): направление FirstLayer (первый слой фона) — offset = FaceOffset +
+        /// FirstLayerThickness/2 + d/2; второе направление (лежит поверх ПЕРВОГО слоя фона
+        /// целиком) — offset = FaceOffset + FirstLayerThickness + d/2.
         /// </summary>
-        public double BarElevation(SlabGeometry slab, ZoneDef z)
+        public double BandZAt(SlabGeometry slab, ZoneDef z,
+            double along1Mm, double along2Mm, double acrossFromMm, double acrossToMm)
         {
             double layer = (z.Dir == _s.FirstLayer) ? _s.FirstLayerThickness / 2.0 : _s.FirstLayerThickness;
             double d = z.Diameter;
             double off = _s.FaceOffset + layer + d / 2.0;
-            return z.Face == Face.Top ? slab.TopMm - off : slab.BottomMm + off;
+
+            var corners = CornerZs(slab, z, z.Face, along1Mm, along2Mm, acrossFromMm, acrossToMm);
+            return z.Face == Face.Top ? corners.Min() - off : corners.Max() + off;
+        }
+
+        /// <summary>Одна "ступень лесенки" — подряд идущая группа копий массива на одной общей
+        /// горизонтальной отметке, см. ComputeRungs.</summary>
+        public class RebarRung
+        {
+            public double AcrossStartMm;
+            public int Count;
+            public double ZBar;
+        }
+
+        /// <summary>
+        /// Разбивает массив копий (acrossStart..acrossStart+(count-1)*step) на "ступени лесенки":
+        /// подряд идущие группы копий на одной общей горизонтальной отметке (см. BandZAt), между
+        /// которыми — ступенчатый сдвиг Z вниз/вверх по уклону. Нужно потому, что у BandZAt на
+        /// весь диапазон сразу есть предел: если направление раскладки массива (across) совпадает
+        /// с направлением уклона, а копий много, вся раскладка садится на ОДНУ (самую
+        /// консервативную) отметку — а на "высоком" конце защитный слой до СВОЕЙ (ближней) грани
+        /// растёт настолько, что до ПРОТИВОПОЛОЖНОЙ грани он, наоборот, тает и в пределе стержень
+        /// проваливается сквозь неё, если накопленный по уклону перепад сравним с толщиной плиты.
+        /// Ступень растёт жадно, пока для всего накопленного диапазона запас до ПРОТИВОПОЛОЖНОЙ
+        /// грани (тоже по худшему из её 4 углов) не станет меньше FaceOffset — это и есть момент,
+        /// когда дальнейшее продолжение той же ступени начало бы срезать норматив с обратной
+        /// стороны плиты. Как только запас исчерпан — фиксируем ступень (её Z — BandZAt по
+        /// накопленному диапазону) и начинаем следующую заново с этой точки, тем же способом
+        /// (свой худший угол для нового диапазона), а не продолжаем предыдущую отметку.
+        /// На плоской плите или коротком/пологом массиве, где всего диапазона не хватает, чтобы
+        /// исчерпать запас у противоположной грани, получается одна ступень на весь band —
+        /// поведение идентично "плоскому" случаю (как было до лесенки).
+        /// </summary>
+        public List<RebarRung> ComputeRungs(SlabGeometry slab, ZoneDef z,
+            double along1Mm, double along2Mm, double acrossStartMm, double stepMm, int count)
+        {
+            Face opposite = z.Face == Face.Top ? Face.Bottom : Face.Top;
+            var rungs = new List<RebarRung>();
+            int i0 = 0;
+            while (i0 < count)
+            {
+                int i1 = i0;
+                while (i1 + 1 < count)
+                {
+                    double acrossFrom = acrossStartMm + i0 * stepMm;
+                    double acrossToCandidate = acrossStartMm + (i1 + 1) * stepMm;
+                    double zBarCandidate = BandZAt(slab, z, along1Mm, along2Mm, acrossFrom, acrossToCandidate);
+                    var oppCorners = CornerZs(slab, z, opposite, along1Mm, along2Mm, acrossFrom, acrossToCandidate);
+                    double oppositeWorst = z.Face == Face.Top ? oppCorners.Max() : oppCorners.Min();
+                    double oppositeMargin = z.Face == Face.Top ? zBarCandidate - oppositeWorst : oppositeWorst - zBarCandidate;
+                    if (oppositeMargin < _s.FaceOffset) break;
+                    i1++;
+                }
+                double from = acrossStartMm + i0 * stepMm;
+                double to = acrossStartMm + i1 * stepMm;
+                rungs.Add(new RebarRung
+                {
+                    AcrossStartMm = from,
+                    Count = i1 - i0 + 1,
+                    ZBar = BandZAt(slab, z, along1Mm, along2Mm, from, to)
+                });
+                i0 = i1 + 1;
+            }
+            return rungs;
         }
 
         private void WriteParams(Autodesk.Revit.DB.Structure.Rebar r, ZoneDef z, bool hook, string mark)

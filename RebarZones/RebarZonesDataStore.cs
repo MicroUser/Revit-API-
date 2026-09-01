@@ -36,6 +36,11 @@ namespace LiraToRevit.Rebar
             // разбираем на C#, только передаём обратно в rebar_zones.html при следующем открытии
             // (см. RebarZonesWindow.CollectStateAsync/OnClosing). Формат: {comboKey:[zone,...]}.
             public string SavedZonesJson { get; set; }
+            // Диаметр/шаг фоновой (основной) арматуры (см. rebar_zones.html BGd/BGs и
+            // BGdTop/BGsTop/BGdBottom/BGsBottom для фундаментов) — у РАЗНЫХ плит фон может быть
+            // разным (у одной d12, у другой d14 и т.п.), поэтому хранится здесь, per-floor, а не
+            // общей на весь проект секцией, как раньше. Сырой JSON без разбора на C#.
+            public string BgSettingsJson { get; set; }
         }
 
         /// <summary>Ключ вкладки: "top-x" / "top-y" / "bottom-x" / "bottom-y".</summary>
@@ -133,6 +138,38 @@ namespace LiraToRevit.Rebar
 
         public static void SaveAnchorSettingsJson(Document doc, string rawJson) =>
             ProjectDataStore.SaveSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), AnchorSectionKey, rawJson);
+
+        private const string TopBendSectionKey = "rebar_zones_topbend";
+
+        /// <summary>Глобальный переключатель "Загнутые/Прямые верхние стержни" (см.
+        /// PlacementSettings.BendTopBars и rebar_zones.html BEND_TOP) — общий на весь проект,
+        /// как и анкеровка выше, а не на отдельную плиту. Сырая JSON-строка ("true"/"false")
+        /// без разбора на C#, кроме момента размещения (см. RebarZonesWindow.PlaceZones). Форма
+        /// конкретной зоны (П/Г/Авто/Прямая) — отдельно, приходит per-zone в "place:" (см.
+        /// JsZone.Shape), а не хранится здесь.</summary>
+        public static string LoadTopBendJson(Document doc) =>
+            ProjectDataStore.LoadSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), TopBendSectionKey);
+
+        public static void SaveTopBendJson(Document doc, string rawJson) =>
+            ProjectDataStore.SaveSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), TopBendSectionKey, rawJson);
+
+        /// <summary>Диаметр/шаг фоновой (основной) арматуры (см. rebar_zones.html BGd/BGs и
+        /// BGdTop/BGsTop/BGdBottom/BGsBottom для фундаментов) — per-floor (см. FloorData.BgSettingsJson):
+        /// у разных плит фон может отличаться (у одной d12, у другой d14), в отличие от анкеровки/
+        /// переключателя загиба выше, которые общие на весь проект. Без сохранения фон молча
+        /// сбрасывался бы на дефолтные 10мм при каждом переоткрытии окна, даже если пользователь его
+        /// менял и уже разместил зоны с другим фоном. Сырой JSON без разбора на C#.</summary>
+        public static string LoadBgSettingsJson(Document doc, Floor floor) =>
+            GetOrEmpty(LoadAll(RevitKJChecklist.ChecklistCommand.GetSavePath(doc)), floor).BgSettingsJson;
+
+        public static void SaveBgSettingsJson(Document doc, Floor floor, string rawJson)
+        {
+            string filePath = RevitKJChecklist.ChecklistCommand.GetSavePath(doc);
+            var all = LoadAll(filePath);
+            if (!all.TryGetValue(floor.UniqueId, out var fd)) { fd = new FloorData(); all[floor.UniqueId] = fd; }
+            fd.BgSettingsJson = rawJson;
+            SaveAll(filePath, all);
+        }
 
         /// <summary>Сырой снимок зон (см. FloorData.SavedZonesJson) для этой плиты, если есть.</summary>
         public static string LoadZonesJson(Document doc, Floor floor) =>

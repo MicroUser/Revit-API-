@@ -25,6 +25,10 @@ namespace KzhNotes
         /// текущего проекта с этим семейством (напр. "Л" -> Л-1, Л-2, Л-3 из снимка листов).</summary>
         public string MarkFamily { get; set; }
 
+        /// <summary>true — в UI список (Options/MarkFamily) отображается чекбоксами с множественным
+        /// выбором; значение хранится как марки через запятую (напр. "Пм-1,Пм-2,Пм-3").</summary>
+        public bool Multi { get; set; }
+
         public FieldDef() { }
         public FieldDef(string name, string def, string label = null, List<string> options = null)
         {

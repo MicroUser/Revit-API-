@@ -73,6 +73,57 @@
     <Reference Include="WindowsBase" />
 
   </ItemGroup>
+  <!--
+    Command-line MSBuild (dotnet build / MSBuild.exe без Visual Studio) не резолвит
+    PackageReference в @(Reference) для проектов старого формата (без Sdk=) — таргет
+    ResolvePackageAssets определён только в Microsoft.NET.Sdk (см. комментарий "in dotnet/sdk"
+    в Microsoft.Common.CurrentVersion.targets). В самой Visual Studio PackageReference
+    резолвится штатно через её NuGet-интеграцию, поэтому здесь Condition исключает VS.
+    Пути ниже собраны из obj\project.assets.json (net48-таргет) для System.Text.Json 8.0.5
+    и System.Resources.Extensions 8.0.0 со всем транзитивным замыканием.
+  -->
+  <ItemGroup Condition="'$(BuildingInsideVisualStudio)' != 'true'">
+    <Reference Include="System.Text.Json">
+      <HintPath>$(NuGetPackageRoot)system.text.json\8.0.5\lib\net462\System.Text.Json.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Text.Encodings.Web">
+      <HintPath>$(NuGetPackageRoot)system.text.encodings.web\8.0.0\lib\net462\System.Text.Encodings.Web.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Resources.Extensions">
+      <HintPath>$(NuGetPackageRoot)system.resources.extensions\8.0.0\lib\net462\System.Resources.Extensions.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="Microsoft.Bcl.AsyncInterfaces">
+      <HintPath>$(NuGetPackageRoot)microsoft.bcl.asyncinterfaces\8.0.0\lib\net462\Microsoft.Bcl.AsyncInterfaces.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Memory">
+      <HintPath>$(NuGetPackageRoot)system.memory\4.5.5\lib\net461\System.Memory.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Buffers">
+      <HintPath>$(NuGetPackageRoot)system.buffers\4.5.1\ref\net45\System.Buffers.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Numerics.Vectors">
+      <HintPath>$(NuGetPackageRoot)system.numerics.vectors\4.5.0\ref\net46\System.Numerics.Vectors.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Runtime.CompilerServices.Unsafe">
+      <HintPath>$(NuGetPackageRoot)system.runtime.compilerservices.unsafe\6.0.0\lib\net461\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Threading.Tasks.Extensions">
+      <HintPath>$(NuGetPackageRoot)system.threading.tasks.extensions\4.5.4\lib\net461\System.Threading.Tasks.Extensions.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.ValueTuple">
+      <HintPath>$(NuGetPackageRoot)system.valuetuple\4.5.0\ref\net47\System.ValueTuple.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
   <ItemGroup>
     <Compile Include="ElementIdCompat.cs" />
     <Compile Include="AssemblytoElementMark.cs" />
@@ -179,4 +230,18 @@
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!--
+    ПОПЫТКА (не работает, оставлено как документация): $(MSBuildToolsPath)\Microsoft.CSharp.targets
+    из .NET 8 SDK не тянет за собой WPF-компиляцию XAML (MarkupCompilePass1/2 из
+    PresentationBuildTasks), которая в классическом framework-хостед MSBuild (Visual Studio)
+    подключается автоматически. Импорт framework-версии Microsoft.WinFx.targets формально
+    возможен (файл есть в C:\Windows\Microsoft.NET\Framework64\v4.0.30319\), но задача
+    MarkupCompilePass1 грузится через UsingTask AssemblyName="PresentationBuildTasks..."
+    (GAC-резолюция по strong name) — механизм, завязанный на .NET Framework CLR и
+    недоступный из-под dotnet SDK (процесс MSBuild здесь — .NET 8, а PresentationBuildTasks.dll
+    старой сборки под .NET Framework в него в принципе не загрузить, это не вопрос путей).
+    Итог: сборка WPF-проектов старого формата под .NET Framework без framework-хостед
+    MSBuild.exe (Visual Studio / Build Tools for Visual Studio с workload ".NET desktop
+    development") на текущем окружении невозможна.
+  -->
 </Project>

@@ -97,6 +97,20 @@ namespace BlockTableGenerator
                 "Переименовать выбранные блоки (префикс МАФ_) и добавить атрибуты Наименование/Примечание",
                 DrawTagIcon(32), DrawTagIcon(16)));
 
+            var hatchPanelSource = new RibbonPanelSource { Title = "Площади" };
+            var hatchPanel = new RibbonPanel { Source = hatchPanelSource };
+            tab.Panels.Add(hatchPanel);
+
+            hatchPanelSource.Items.Add(CreateButton(
+                "Ведомость\nплощадей", "HATCHTABLE",
+                "Создать или обновить ведомость площадей по типам штриховок",
+                DrawHatchTableIcon(32), DrawHatchTableIcon(16)));
+
+            hatchPanelSource.Items.Add(CreateButton(
+                "Условные\nобозначения", "HATCHLEGEND",
+                "Создать или обновить таблицу условных обозначений типов штриховок",
+                DrawLegendIcon(32), DrawLegendIcon(16)));
+
             tab.IsActive = false; // не переключаем пользователя на новую вкладку без его выбора
 
             TryKickstartAddinManager();
@@ -230,6 +244,66 @@ namespace BlockTableGenerator
 
                 double holeR = size * 0.08;
                 dc.DrawEllipse(Brushes.White, pen, new System.Windows.Point(margin + size * 0.16, size / 2.0), holeR, holeR);
+            }
+            return Render(visual, size);
+        }
+
+        /// <summary>Иконка "ведомость площадей" для HATCHTABLE — таблица со штриховкой в первой
+        /// ячейке (диагональная штриховка), зелёным по белому.</summary>
+        private static ImageSource DrawHatchTableIcon(int size)
+        {
+            var visual = new DrawingVisual();
+            using (DrawingContext dc = visual.RenderOpen())
+            {
+                double margin = size * 0.14;
+                double w = size - margin * 2;
+                double h = size - margin * 2;
+                var pen = new Pen(Brushes.SeaGreen, Math.Max(1.0, size / 16.0));
+
+                dc.DrawRectangle(Brushes.White, pen, new System.Windows.Rect(margin, margin, w, h));
+
+                double colX = margin + w * 0.42;
+                dc.DrawLine(pen, new System.Windows.Point(colX, margin), new System.Windows.Point(colX, margin + h));
+
+                double rowH = h / 3.0;
+                dc.DrawLine(pen, new System.Windows.Point(margin, margin + rowH), new System.Windows.Point(margin + w, margin + rowH));
+                dc.DrawLine(pen, new System.Windows.Point(margin, margin + rowH * 2), new System.Windows.Point(margin + w, margin + rowH * 2));
+
+                // Диагональная штриховка первой ячейки данных (строка 1, левый столбец).
+                var hatchPen = new Pen(Brushes.SeaGreen, Math.Max(0.75, size / 24.0));
+                dc.PushClip(new RectangleGeometry(new System.Windows.Rect(margin, margin + rowH, colX - margin, rowH)));
+                double step = size * 0.11;
+                for (double x = margin - rowH; x < colX + rowH; x += step)
+                {
+                    dc.DrawLine(hatchPen,
+                        new System.Windows.Point(x, margin + rowH * 2),
+                        new System.Windows.Point(x + rowH, margin + rowH));
+                }
+                dc.Pop();
+            }
+            return Render(visual, size);
+        }
+
+        /// <summary>Иконка "условные обозначения" для HATCHLEGEND — список из двух строк, у каждой
+        /// слева квадрат-образец (штриховка/заливка), справа условная линия "текста", фиолетовым
+        /// по белому.</summary>
+        private static ImageSource DrawLegendIcon(int size)
+        {
+            var visual = new DrawingVisual();
+            using (DrawingContext dc = visual.RenderOpen())
+            {
+                double margin = size * 0.14;
+                var pen = new Pen(Brushes.MediumPurple, Math.Max(1.0, size / 16.0));
+                double swatch = size * 0.22;
+                double lineY1 = margin + swatch * 0.5;
+                double lineY2 = size - margin - swatch * 0.5;
+                double textX = margin + swatch + size * 0.1;
+
+                dc.DrawRectangle(Brushes.Lavender, pen, new System.Windows.Rect(margin, margin, swatch, swatch));
+                dc.DrawLine(pen, new System.Windows.Point(textX, lineY1), new System.Windows.Point(size - margin, lineY1));
+
+                dc.DrawRectangle(Brushes.MediumPurple, pen, new System.Windows.Rect(margin, size - margin - swatch, swatch, swatch));
+                dc.DrawLine(pen, new System.Windows.Point(textX, lineY2), new System.Windows.Point(size - margin, lineY2));
             }
             return Render(visual, size);
         }

@@ -3,13 +3,19 @@ using Autodesk.Revit.DB;
 
 namespace LiraToRevit.Rebar
 {
-    /// <summary>Геометрия плиты: верх/низ и контур для подрезки анкеровки.</summary>
+    /// <summary>Геометрия плиты: верх/низ и контур для подрезки анкеровки. TopMm/BottomMm —
+    /// запасное значение на случай, если явную грань не нашли (см. FindFaces); на обычной
+    /// плоской плите это и есть фактическая отметка. На наклонной плите (одна "стрелка уклона")
+    /// локальная отметка в конкретной точке — TopZMmAt/BottomZMmAt, а не эти константы.</summary>
     public class SlabGeometry
     {
         public double TopMm, BottomMm;
-        private List<CurveLoop> _loops;      // внешний контур + отверстия (все вместе, для правила чётности)
-        private double _planeZ;              // отметка плоскости контуров, футы (Z верхней грани)
+        private List<CurveLoop> _loops;      // внешний контур + отверстия, СПЛЮЩЕННЫЕ в Z=0 — см. FindFaces
         private XYZ _bboxMin, _bboxMax;      // габарит плиты в плане, футы — для построения сканирующей линии
+        // Плоскость верхней/нижней грани (Origin+FaceNormal, футы) — для локальной отметки на
+        // наклонной плите. Null, если явную грань не нашли (сложная/составная поверхность — вне
+        // рамок, см. класс-док) — тогда TopZMmAt/BottomZMmAt откатываются на TopMm/BottomMm.
+        private XYZ _topOrigin, _topNormal, _bottomOrigin, _bottomNormal;
 
         public static SlabGeometry From(Document doc, Floor floor)
         {
@@ -19,8 +25,29 @@ namespace LiraToRevit.Rebar
             g.TopMm = UnitUtils.ConvertFromInternalUnits(bb.Max.Z, UnitTypeId.Millimeters);
             g._bboxMin = bb.Min;
             g._bboxMax = bb.Max;
-            g._loops = FilterLoopsForClipping(GetHorizontalLoops(floor, out g._planeZ));
+
+            List<CurveLoop> topLoops = FindFaces(floor, out g._topOrigin, out g._topNormal, out g._bottomOrigin, out g._bottomNormal);
+            g._loops = FilterLoopsForClipping(FlattenLoopsToZ0(topLoops));
             return g;
+        }
+
+        /// <summary>Локальная отметка верхней/нижней грани в точке (xMm,yMm) — решение уравнения
+        /// плоскости грани (Origin/FaceNormal), а не общая на всю плиту константа: на наклонной
+        /// плите (один уклон) TopMm/BottomMm — это отметка САМОЙ высокой/низкой точки ГАБАРИТА
+        /// плиты целиком, а не поверхности под конкретным стержнем — при уклоне стержень,
+        /// построенный по одной такой константе, "висит в воздухе" везде, кроме одного угла.
+        /// Без найденной грани (см. _topOrigin и класс-док) — откат на TopMm/BottomMm, как было
+        /// раньше (для плоской плиты — тот же результат, она вырожденный случай той же формулы).</summary>
+        public double TopZMmAt(double xMm, double yMm) => PlaneZMm(_topOrigin, _topNormal, xMm, yMm, TopMm);
+        public double BottomZMmAt(double xMm, double yMm) => PlaneZMm(_bottomOrigin, _bottomNormal, xMm, yMm, BottomMm);
+
+        private static double PlaneZMm(XYZ origin, XYZ normal, double xMm, double yMm, double fallbackMm)
+        {
+            if (origin == null || normal == null || System.Math.Abs(normal.Z) < 1e-6) return fallbackMm;
+            double xFt = UnitUtils.ConvertToInternalUnits(xMm, UnitTypeId.Millimeters);
+            double yFt = UnitUtils.ConvertToInternalUnits(yMm, UnitTypeId.Millimeters);
+            double zFt = origin.Z - (normal.X * (xFt - origin.X) + normal.Y * (yFt - origin.Y)) / normal.Z;
+            return UnitUtils.ConvertFromInternalUnits(zFt, UnitTypeId.Millimeters);
         }
 
         /// <summary>
@@ -140,21 +167,77 @@ namespace LiraToRevit.Rebar
             return dir.GetLength() < 1e-9 ? null : dir.Normalize();
         }
 
-        private static List<CurveLoop> GetHorizontalLoops(Floor floor, out double planeZ)
+        /// <summary>Верхняя грань — "преимущественно вверх" (FaceNormal.Z &gt; 0.7), а не точно
+        /// вертикаль: на наклонной плите (одна "стрелка уклона") нормаль верхней грани чуть
+        /// отклонена от (0,0,1), и точное сравнение (как было раньше) вообще не находило грань —
+        /// контур получался пустым, ClipAlong/NearestBoundaryTangent молча переставали работать.
+        /// Порог 0.7 (~45°) с большим запасом покрывает любой реальный уклон плиты, но всё ещё
+        /// отсекает вертикальные боковые грани. Нижняя грань — симметрично, &lt; -0.7. Сохраняем
+        /// Origin/FaceNormal первой найденной грани каждой стороны — для TopZMmAt/BottomZMmAt;
+        /// рёбра контура собираем только с верхней (нижняя грань при вертикальных боковых гранях
+        /// даёт тот же контур в плане — второй набор не нужен, см. FlattenLoopsToZ0).</summary>
+        private static List<CurveLoop> FindFaces(Floor floor,
+            out XYZ topOrigin, out XYZ topNormal, out XYZ bottomOrigin, out XYZ bottomNormal)
         {
             var loops = new List<CurveLoop>();
-            planeZ = 0;
-            bool have = false;
+            topOrigin = topNormal = bottomOrigin = bottomNormal = null;
             var opt = new Options { ComputeReferences = false, DetailLevel = ViewDetailLevel.Coarse };
             foreach (var go in floor.get_Geometry(opt))
                 if (go is Solid s && s.Volume > 0)
                     foreach (Autodesk.Revit.DB.Face f in s.Faces)
-                        if (f is PlanarFace pf && pf.FaceNormal.IsAlmostEqualTo(XYZ.BasisZ))
+                        if (f is PlanarFace pf)
                         {
-                            if (!have) { planeZ = pf.Origin.Z; have = true; }
-                            loops.AddRange(pf.GetEdgesAsCurveLoops());
+                            if (pf.FaceNormal.Z > 0.7)
+                            {
+                                if (topOrigin == null) { topOrigin = pf.Origin; topNormal = pf.FaceNormal; }
+                                loops.AddRange(pf.GetEdgesAsCurveLoops());
+                            }
+                            else if (pf.FaceNormal.Z < -0.7 && bottomOrigin == null)
+                            {
+                                bottomOrigin = pf.Origin; bottomNormal = pf.FaceNormal;
+                            }
                         }
             return loops;
+        }
+
+        /// <summary>Сплющивает рёбра контура в Z=0 — обрезка по кромке (ClipAlong) и поиск
+        /// касательной (NearestBoundaryTangent) чисто плановые (в проекции на XY) задачи; на
+        /// наклонной плите рёбра верхней грани лежат в наклонной плоскости (Z меняется вдоль
+        /// ребра), и без сплющивания скан-линия ClipAlong (строится на фиксированном Z) их бы
+        /// не пересекла вообще, кроме случайных точек.
+        /// Прямые сплющиваются точно (просто обнуляем Z у обеих концевых точек — для отрезка
+        /// это не меняет форму в плане). У НЕ-прямых кромок (дуга и т.п. — контур сложной формы,
+        /// не только ортогональные плиты) точный сплющенный эквивалент не всегда представим тем
+        /// же типом кривой (собственная плоскость дуги не обязательно горизонтальна), а для
+        /// плановых задач точная кривизна не нужна — разбиваем на мелкие отрезки (Tessellate) и
+        /// сплющиваем каждый как прямую. Раньше такая кривая оставалась КАК ЕСТЬ на исходном Z,
+        /// а соседние прямые уже были на Z=0 — стык между ними рвался (CurveLoop.Append бросал
+        /// "This curve will make the loop discontinuous").</summary>
+        private static List<CurveLoop> FlattenLoopsToZ0(List<CurveLoop> loops)
+        {
+            var res = new List<CurveLoop>();
+            foreach (var loop in loops)
+            {
+                var flat = new CurveLoop();
+                foreach (Curve c in loop)
+                {
+                    if (c is Line ln)
+                    {
+                        XYZ p0 = ln.GetEndPoint(0), p1 = ln.GetEndPoint(1);
+                        flat.Append(Line.CreateBound(new XYZ(p0.X, p0.Y, 0), new XYZ(p1.X, p1.Y, 0)));
+                        continue;
+                    }
+                    var pts = c.Tessellate();
+                    for (int i = 0; i + 1 < pts.Count; i++)
+                    {
+                        XYZ a = new XYZ(pts[i].X, pts[i].Y, 0), b = new XYZ(pts[i + 1].X, pts[i + 1].Y, 0);
+                        if (a.DistanceTo(b) < 1e-9) continue; // после обнуления Z могла схлопнуться в точку
+                        flat.Append(Line.CreateBound(a, b));
+                    }
+                }
+                res.Add(flat);
+            }
+            return res;
         }
 
         /// <summary>
@@ -169,9 +252,11 @@ namespace LiraToRevit.Rebar
 
             double acrossFt = UnitUtils.ConvertToInternalUnits(acrossMm, UnitTypeId.Millimeters);
             const double margin = 1.0;   // фут — заведомо за пределами габарита плиты
+            // Z=0 — как и _loops (см. FlattenLoopsToZ0): подрезка чисто плановая, реальная
+            // (наклонная) отметка грани тут ни при чём.
             Line scan = dir == Dir.X
-                ? Line.CreateBound(new XYZ(_bboxMin.X - margin, acrossFt, _planeZ), new XYZ(_bboxMax.X + margin, acrossFt, _planeZ))
-                : Line.CreateBound(new XYZ(acrossFt, _bboxMin.Y - margin, _planeZ), new XYZ(acrossFt, _bboxMax.Y + margin, _planeZ));
+                ? Line.CreateBound(new XYZ(_bboxMin.X - margin, acrossFt, 0), new XYZ(_bboxMax.X + margin, acrossFt, 0))
+                : Line.CreateBound(new XYZ(acrossFt, _bboxMin.Y - margin, 0), new XYZ(acrossFt, _bboxMax.Y + margin, 0));
 
             // координаты пересечений сканирующей линии с рёбрами контуров (внешний + отверстия), мм вдоль стержня
             var xs = new List<double>();

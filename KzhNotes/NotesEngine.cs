@@ -9,6 +9,8 @@
 //   {{КЖ role="Спецификация" excl="Выпуски"}}         -> ссылка по марке текущего листа
 //   {{КЖ role="Общие указания..." scope="global"}}    -> глобальная ссылка (может дать диапазон)
 //   {{КЖ role="..." scope="mark:СТ-1"}}              -> ссылка на конкретную чужую марку
+//   {{КЖ role="..." scope="marks:{поле}"}}            -> ссылка на список чужих марок (значение
+//                                                         поля Multi=true, марки через запятую)
 //   {{СОВМЕСТНО}}                                      -> "листом/листами КЖ-.." (та же марка, без себя)
 //   {{СЕЧЕНИЯ}}                                        -> авто-сборка сечений (только стены)
 
@@ -211,6 +213,14 @@ namespace KzhNotes
 
             IEnumerable<SheetInfo> pool;
             if (scope == "global") pool = _sheets;
+            else if (scope != null && scope.StartsWith("marks:"))
+            {
+                var markList = scope.Substring(6)
+                    .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                pool = _sheets.Where(s => s.Mark != null &&
+                    markList.Any(mk => string.Equals(mk, s.Mark, StringComparison.OrdinalIgnoreCase)));
+            }
             else if (scope != null && scope.StartsWith("mark:")) pool = OfMark(scope.Substring(5));
             else pool = cur.Mark != null ? OfMark(cur.Mark) : Enumerable.Empty<SheetInfo>();
 

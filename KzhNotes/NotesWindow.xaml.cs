@@ -194,13 +194,42 @@ namespace KzhNotes
                 List<string> options = fd.Options;
                 if (!string.IsNullOrEmpty(fd.MarkFamily))
                 {
-                    var marks = _snapshot.Where(s => s.Family == fd.MarkFamily && s.Mark != null)
+                    var marks = _snapshot.Where(s => s.Mark != null && string.Equals(s.Family, fd.MarkFamily, StringComparison.OrdinalIgnoreCase))
                                           .Select(s => s.Mark).Distinct()
                                           .OrderBy(m => m, StringComparer.OrdinalIgnoreCase).ToList();
                     if (marks.Count > 0) options = marks;
                 }
 
-                if (options != null && options.Count > 0)
+                if (fd.Multi)
+                {
+                    var selected = new HashSet<string>(
+                        (val ?? "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()),
+                        StringComparer.OrdinalIgnoreCase);
+                    var wrap = new WrapPanel();
+                    var opts = options ?? new List<string>();
+                    if (opts.Count == 0)
+                    {
+                        wrap.Children.Add(new TextBlock { Text = "— нет марок этого семейства на выбранных листах —", Foreground = System.Windows.Media.Brushes.Gray });
+                    }
+                    EventHandler onToggle = null;
+                    onToggle = (s, a) =>
+                    {
+                        var chosen = wrap.Children.OfType<CheckBox>()
+                            .Where(c => c.IsChecked == true)
+                            .Select(c => (string)c.Content);
+                        vm.Item.Fields[key] = string.Join(",", chosen);
+                        RefreshPreview();
+                    };
+                    foreach (var opt in opts)
+                    {
+                        var cb = new CheckBox { Content = opt, Margin = new Thickness(0, 0, 12, 0), IsChecked = selected.Contains(opt) };
+                        cb.Checked += (s, a) => onToggle(s, a);
+                        cb.Unchecked += (s, a) => onToggle(s, a);
+                        wrap.Children.Add(cb);
+                    }
+                    row.Children.Add(wrap);
+                }
+                else if (options != null && options.Count > 0)
                 {
                     var cb = new ComboBox { IsEditable = true, ItemsSource = options, Text = val ?? "" };
                     cb.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,

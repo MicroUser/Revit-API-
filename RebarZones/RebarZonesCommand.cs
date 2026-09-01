@@ -185,22 +185,22 @@ namespace LiraToRevit.Rebar
 
         /// <summary>
         /// DXF из ЛИРА не обязательно в тех же координатах, что модель Revit (разные базовые
-        /// точки/начала координат при экспорте). Выравниваем по центру габарита: сдвигаем всю
-        /// сетку ячеек так, чтобы её центр совпал с центром габарита выбранной плиты. Поворот
-        /// не учитывается — предполагается, что оси X/Y ЛИРА и Revit сонаправлены.
+        /// точки/начала координат при экспорте). Выравниваем по углу габарита (min X, min Y) — не
+        /// по центру: контур плиты и габарит DXF-мозаики уже проверены на совпадение по площади
+        /// (см. ContourMismatch), а для неправильной (ступенчатой) формы центр габарита не
+        /// совпадает с "видимым" центром фигуры и выравнивание по нему съезжает. Совмещение по
+        /// одному углу однозначно задаёт сдвиг при простом параллельном переносе — тот же принцип,
+        /// что и у сетки изолиний (см. SlabGeometry.BuildIsolines — тоже от bboxMin). Поворот не
+        /// учитывается — предполагается, что оси X/Y ЛИРА и Revit сонаправлены.
         /// </summary>
         private static (double Dx, double Dy) ComputeOffset(Floor floor, DxfImportResult dxf)
         {
             var bb = floor.get_BoundingBox(null);
-            double floorCx = (bb.Min.X + bb.Max.X) / 2.0;
-            double floorCy = (bb.Min.Y + bb.Max.Y) / 2.0;
 
             double minX = dxf.Cells.Min(c => c.Polygon.Min(p => p.X));
-            double maxX = dxf.Cells.Max(c => c.Polygon.Max(p => p.X));
             double minY = dxf.Cells.Min(c => c.Polygon.Min(p => p.Y));
-            double maxY = dxf.Cells.Max(c => c.Polygon.Max(p => p.Y));
 
-            return (floorCx - (minX + maxX) / 2.0, floorCy - (minY + maxY) / 2.0);
+            return (bb.Min.X - minX, bb.Min.Y - minY);
         }
 
         /// <summary>
@@ -277,13 +277,138 @@ namespace LiraToRevit.Rebar
             return (allLoops[outerIdx], openings);
         }
 
-        /// <summary>Оси (Grid) проекта — визуальный фон в редакторе, для наглядности расположения зон.</summary>
-        private static List<(string Name, XYZ P0, XYZ P1)> GetGrids(Document doc)
+        /// <summary>Оси (Grid) проекта — визуальный фон в редакторе, для наглядности расположения
+        /// зон. Только те, что реально пересекают габарит ВЫБРАННОЙ плиты — в проекте с большим
+        /// количеством осей (весь корпус на десятках этажей) без фильтра в редактор попадали ВСЕ
+        /// оси проекта разом, забивая фон осями других частей здания, к этой плите не относящимися.</summary>
+        private static List<(string Name, XYZ P0, XYZ P1)> GetGrids(Document doc, Floor floor)
         {
+            var bb = floor.get_BoundingBox(null);
             return new FilteredElementCollector(doc).OfClass(typeof(Grid)).Cast<Grid>()
                 .Where(g => g.Curve is Line)
-                .Select(g => (g.Name, ((Line)g.Curve).GetEndPoint(0), ((Line)g.Curve).GetEndPoint(1)))
+                .Select(g => (g.Name, P0: ((Line)g.Curve).GetEndPoint(0), P1: ((Line)g.Curve).GetEndPoint(1)))
+                .Where(g => LineIntersectsBoxXY(g.P0, g.P1, bb))
                 .ToList();
+        }
+
+        /// <summary>Пересекает ли отрезок p0-p1 прямоугольник габарита bb в плане (X/Y, Z не
+        /// учитывается — оси вертикальны по всей высоте здания). Liang-Barsky — работает и для
+        /// наклонных осей, не только для ортогональных.</summary>
+        private static bool LineIntersectsBoxXY(XYZ p0, XYZ p1, BoundingBoxXYZ bb)
+        {
+            double dx = p1.X - p0.X, dy = p1.Y - p0.Y;
+            double t0 = 0.0, t1 = 1.0;
+            double[] p = { -dx, dx, -dy, dy };
+            double[] q = { p0.X - bb.Min.X, bb.Max.X - p0.X, p0.Y - bb.Min.Y, bb.Max.Y - p0.Y };
+            for (int i = 0; i < 4; i++)
+            {
+                if (Math.Abs(p[i]) < 1e-9)
+                {
+                    if (q[i] < 0) return false; // параллельно соответствующей стороне и снаружи неё
+                }
+                else
+                {
+                    double r = q[i] / p[i];
+                    if (p[i] < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+                    else { if (r < t0) return false; if (r < t1) t1 = r; }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>Допуск в плане при отборе опор для конкретной плиты, мм — пилон/колонна у
+        /// кромки физически соприкасается с габаритом плиты почти всегда, небольшой запас — на
+        /// случай, если плита не доходит вплотную до грани опоры (обрамление, зазор и т.п.).</summary>
+        private const double SupportPlanToleranceMm = 500.0;
+
+        /// <summary>Пилоны/колонны рядом с этой плитой (та же выборка "Категория именования"
+        /// сборки, что и SupportDetector.HasParallelSupport, — она же решает П vs Г при загибе) —
+        /// визуальный фон в редакторе, чтобы было видно, у какой кромки встанет П-образная форма.
+        /// Отфильтрованы и по высоте (тот же допуск SupportZToleranceMm, что и в реальном решении
+        /// формы), и по плану (габарит опоры должен пересекаться с габаритом ИМЕННО этой плиты) —
+        /// без второго фильтра показывались бы вообще все опоры того же этажа сборки по всему
+        /// проекту, а не только те, что реально стоят под этой плитой.</summary>
+        private static List<List<XYZ>> GetSupports(Document doc, Floor floor)
+        {
+            var res = new List<List<XYZ>>();
+            var floorBb = floor.get_BoundingBox(null);
+            if (floorBb == null) return res;
+
+            double zTolFt = UnitUtils.ConvertToInternalUnits(SupportDetector.SupportZToleranceMm, UnitTypeId.Millimeters);
+            double xyTolFt = UnitUtils.ConvertToInternalUnits(SupportPlanToleranceMm, UnitTypeId.Millimeters);
+            foreach (var s in SupportDetector.ResolveSupports(doc, new PlacementSettings()))
+            {
+                if (s.BBoxMax.Z < floorBb.Min.Z - zTolFt || s.BBoxMin.Z > floorBb.Max.Z + zTolFt) continue;
+                if (s.BBoxMax.X < floorBb.Min.X - xyTolFt || s.BBoxMin.X > floorBb.Max.X + xyTolFt) continue;
+                if (s.BBoxMax.Y < floorBb.Min.Y - xyTolFt || s.BBoxMin.Y > floorBb.Max.Y + xyTolFt) continue;
+
+                // Настоящий контур стены (по оси + толщине), если получилось — осевой bbox
+                // подходит для ортогональной прямой стены, но у диагональной/дуговой стены сильно
+                // искажает форму и разваливает цепочку соседних сегментов "лесенкой" из
+                // непохожих прямоугольников (см. скриншот пользователя: стена вдоль дуговой
+                // кромки плиты, смоделированная короткими прямыми сегментами). Bbox — только
+                // запасной вариант (не стена/нет LocationCurve/не удалось построить).
+                List<XYZ> poly = s.MemberId != null && doc.GetElement(s.MemberId) is Wall wall
+                    ? WallFootprint(wall) : null;
+                if (poly == null)
+                    poly = new List<XYZ>
+                    {
+                        new XYZ(s.BBoxMin.X, s.BBoxMin.Y, 0),
+                        new XYZ(s.BBoxMax.X, s.BBoxMin.Y, 0),
+                        new XYZ(s.BBoxMax.X, s.BBoxMax.Y, 0),
+                        new XYZ(s.BBoxMin.X, s.BBoxMax.Y, 0)
+                    };
+                res.Add(poly);
+            }
+            return res;
+        }
+
+        /// <summary>Настоящий плановый контур стены по её оси (LocationCurve) и толщине (Width) —
+        /// прямая стена даёт повёрнутый (вдоль стены, а не вдоль осей модели) прямоугольник, дуговая
+        /// — кольцевой сектор (тоже по оси, со смещением ±Width/2 по радиусу, тесселированный —
+        /// точная кривизна тут не нужна, это только визуальный фон). Null — нет LocationCurve или
+        /// её кривая не Line/Arc (например, стена по сплайну — не ожидается в этом проекте).</summary>
+        private static List<XYZ> WallFootprint(Wall wall)
+        {
+            if (!(wall.Location is LocationCurve lc)) return null;
+            double halfW = wall.Width / 2.0;
+
+            if (lc.Curve is Line line)
+            {
+                XYZ p0 = line.GetEndPoint(0), p1 = line.GetEndPoint(1);
+                XYZ dir = (p1 - p0);
+                if (dir.GetLength() < 1e-9) return null;
+                dir = dir.Normalize();
+                XYZ perp = new XYZ(-dir.Y, dir.X, 0).Multiply(halfW);
+                return new List<XYZ>
+                {
+                    new XYZ(p0.X + perp.X, p0.Y + perp.Y, 0),
+                    new XYZ(p1.X + perp.X, p1.Y + perp.Y, 0),
+                    new XYZ(p1.X - perp.X, p1.Y - perp.Y, 0),
+                    new XYZ(p0.X - perp.X, p0.Y - perp.Y, 0)
+                };
+            }
+
+            if (lc.Curve is Arc arc)
+            {
+                var axis = arc.Tessellate();
+                var outer = new List<XYZ>();
+                var inner = new List<XYZ>();
+                foreach (var pt in axis)
+                {
+                    XYZ radial = new XYZ(pt.X - arc.Center.X, pt.Y - arc.Center.Y, 0);
+                    if (radial.GetLength() < 1e-9) continue;
+                    radial = radial.Normalize().Multiply(halfW);
+                    outer.Add(new XYZ(pt.X + radial.X, pt.Y + radial.Y, 0));
+                    inner.Add(new XYZ(pt.X - radial.X, pt.Y - radial.Y, 0));
+                }
+                if (outer.Count < 2) return null;
+                inner.Reverse();
+                outer.AddRange(inner);
+                return outer;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -343,7 +468,8 @@ namespace LiraToRevit.Rebar
             List<(DxfImportResult Dxf, Face Face, Dir Dir, string Path)> datasets, Dictionary<string, double> contourMismatch)
         {
             var (outline, openings) = GetFloorOutlineAndOpenings(floor);
-            var grids = GetGrids(doc);
+            var grids = GetGrids(doc, floor);
+            var supports = GetSupports(doc, floor);
             var isolines = SlabGeometry.From(doc, floor).BuildIsolines();
             var placedHistory = RebarZonesDataStore.LoadPlaced(doc, floor);
             string savedZonesJson = RebarZonesDataStore.LoadZonesJson(doc, floor);
@@ -375,6 +501,29 @@ namespace LiraToRevit.Rebar
                 catch { anchor = null; }
             }
 
+            // Глобальный переключатель "Загнутые/Прямые верхние стержни" — тоже общий на весь
+            // проект, не на плиту (см. RebarZonesDataStore.LoadTopBendJson), сырой JSON без
+            // разбора. Форма конкретной зоны (П/Г/Авто/Прямая) хранится в самой зоне (savedZones),
+            // не здесь.
+            object bendTop = null;
+            string bendTopJson = RebarZonesDataStore.LoadTopBendJson(doc);
+            if (!string.IsNullOrEmpty(bendTopJson))
+            {
+                try { bendTop = JsonSerializer.Deserialize<JsonElement>(bendTopJson); }
+                catch { bendTop = null; }
+            }
+
+            // Диаметр/шаг фоновой (основной) арматуры — per-floor, у разных плит может отличаться
+            // (см. RebarZonesDataStore.LoadBgSettingsJson), сырой JSON без разбора. Без него фон
+            // молча сбрасывался на дефолтные 10мм при каждом переоткрытии окна.
+            object bg = null;
+            string bgJson = RebarZonesDataStore.LoadBgSettingsJson(doc, floor);
+            if (!string.IsNullOrEmpty(bgJson))
+            {
+                try { bg = JsonSerializer.Deserialize<JsonElement>(bgJson); }
+                catch { bg = null; }
+            }
+
             var payload = new
             {
                 datasets = BuildDatasetsPayload(datasets.Select(d => (d.Dxf, d.Face, d.Dir)), floor),
@@ -382,6 +531,9 @@ namespace LiraToRevit.Rebar
                 // Крупные проёмы (≥1000×1000мм) — см. GetFloorOutlineAndOpenings. Нужны редактору,
                 // чтобы не рисовать анкеровку "сквозь" проём, где стержень в реальности обрывается.
                 openings = openings.Select(op => op.Select(p => new[] { Math.Round(M(p.X), 4), Math.Round(M(p.Y), 4) }).ToArray()).ToArray(),
+                // Пилоны/колонны у этой плиты (см. GetSupports) — серым пунктиром на фоне: та же
+                // геометрия, что решает П vs Г при загибе (SupportDetector.HasParallelSupport).
+                supports = supports.Select(op => op.Select(p => new[] { Math.Round(M(p.X), 4), Math.Round(M(p.Y), 4) }).ToArray()).ToArray(),
                 grids = grids.Select(g => new
                 {
                     name = g.Name,
@@ -412,6 +564,12 @@ namespace LiraToRevit.Rebar
                 // Настраиваемая анкеровка из прошлого сеанса (см. выше) — если есть, редактор
                 // применяет коэффициент/построчные длины поверх дефолтных 55d, см. loadState.
                 anchor,
+                // Глобальный переключатель "Загнутые/Прямые верхние стержни" из прошлого сеанса
+                // (см. выше) — если есть, редактор восстанавливает его в "⚙ Настройки", см. loadState.
+                bendTop,
+                // Диаметр/шаг фоновой арматуры из прошлого сеанса (см. выше) — если есть, редактор
+                // восстанавливает его поверх дефолтных 10мм/⌀20 для фундамента, см. loadState.
+                bg,
                 // Фундамент — своя логика фоновой арматуры (верх/низ раздельно, дефолт ⌀20).
                 isFoundation,
                 // Вкладки, где контур плиты и габарит DXF разошлись более чем на 20% (см.

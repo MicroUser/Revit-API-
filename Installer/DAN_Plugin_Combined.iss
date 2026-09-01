@@ -2,7 +2,7 @@
 ; Если папка Addins нужной версии не найдена — эта версия просто пропускается
 ; (в отличие от DAN_Plugin.iss/DAN_Plugin2026.iss, которые требуют ровно одну версию).
 #define AppName    "DAN Plugin"
-#define AppVersion "2.2"
+#define AppVersion "2.3.1"
 #define Publisher  "Daniil Levin"
 
 [Setup]

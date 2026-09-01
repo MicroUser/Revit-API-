@@ -4,7 +4,7 @@
 ; в работе плагина: вкладка ленты Revit называется "LD", а не "DAN" (см. LD_BRAND в Loader.cs).
 ; DAN_Plugin.dll и все остальные файлы — те же самые, из обычной сборки Release.
 #define AppName    "DAN Plugin"
-#define AppVersion "2.2"
+#define AppVersion "2.3"
 #define Publisher  "Daniil Levin"
 
 [Setup]

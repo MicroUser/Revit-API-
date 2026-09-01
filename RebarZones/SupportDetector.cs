@@ -18,6 +18,13 @@ namespace LiraToRevit.Rebar
         {
             public XYZ BBoxMin, BBoxMax;  // футы, план
             public bool LongAxisIsX;      // true — длинная сторона вдоль X, false — вдоль Y
+            // Элемент состава (стена/колонна), из которого взят этот габарит — null у запасного
+            // варианта (общий bbox сборки целиком, без единого элемента). Сама логика решения
+            // Г/П (HasParallelSupport) от него не зависит, использует только BBoxMin/Max/
+            // LongAxisIsX — нужен только визуальному фону в редакторе (RebarZonesCommand.GetSupports),
+            // чтобы вместо осевого прямоугольника габарита показать НАСТОЯЩИЙ контур стены
+            // (в т.ч. дуговой — см. WallFootprint), а не его bbox.
+            public ElementId MemberId;
         }
 
         /// <summary>Допуск по высоте при поиске опоры для конкретной плиты, мм. Одна сборка может
@@ -91,7 +98,7 @@ namespace LiraToRevit.Rebar
                     BoundingBoxXYZ mbb = member.get_BoundingBox(null);
                     if (mbb == null) continue;
                     double mdx = mbb.Max.X - mbb.Min.X, mdy = mbb.Max.Y - mbb.Min.Y;
-                    res.Add(new SupportInfo { BBoxMin = mbb.Min, BBoxMax = mbb.Max, LongAxisIsX = mdx >= mdy });
+                    res.Add(new SupportInfo { BBoxMin = mbb.Min, BBoxMax = mbb.Max, LongAxisIsX = mdx >= mdy, MemberId = memberId });
                     memberSupports++;
                 }
                 if (memberSupports > 0) continue;
@@ -133,7 +140,7 @@ namespace LiraToRevit.Rebar
         {
             double tol = _s.SupportSearchToleranceMm;
             double zTol = RebarUnits.Mm(SupportZToleranceMm);
-            double zBarFt = RebarUnits.Mm(zBarMm); // zBarMm — в мм (см. RebarPlacer.BarElevation), BBoxMin/Max.Z сборок — в футах
+            double zBarFt = RebarUnits.Mm(zBarMm); // zBarMm — в мм, локальная отметка в точке загиба (см. RebarBuilder.ZAt), BBoxMin/Max.Z сборок — в футах
 
             foreach (var sup in _supports)
             {

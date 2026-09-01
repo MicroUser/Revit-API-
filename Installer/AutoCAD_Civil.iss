@@ -4,7 +4,7 @@
 ; реально сканируется автозагрузчиком AutoCAD 2025 у этого пользователя — поэтому
 ; PrivilegesRequired=lowest, права администратора не нужны.
 #define AppName    "AutoCAD+Civil"
-#define AppVersion "1.0.0"
+#define AppVersion "2.1"
 #define Publisher  "Daniil Levin"
 #define BundleName "AutoCAD+Civil.bundle"
 

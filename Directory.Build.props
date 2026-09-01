@@ -19,4 +19,16 @@
     <BaseIntermediateOutputPath>obj2020\</BaseIntermediateOutputPath>
     <MSBuildProjectExtensionsPath>obj2020\</MSBuildProjectExtensionsPath>
   </PropertyGroup>
+
+  <!--
+    Эта машина собирает только через .NET 8 SDK (MSBuild из dotnet), без установленного
+    net4.8 Developer/Targeting Pack (MSB3644: "не найдены ссылочные сборки"). Официальный
+    обходной путь от Microsoft — пакет Microsoft.NETFramework.ReferenceAssemblies из NuGet,
+    не требует прав администратора и не ставится в систему. Затронуты только net48-проекты
+    (DAN_Plugin, Loader, AutoCAD+Civil2020) — на машине с нормально установленным net4.8
+    Targeting Pack этот пакет просто не понадобится, но и не помешает.
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectName)'=='DAN_Plugin' or '$(MSBuildProjectName)'=='Loader' or '$(MSBuildProjectName)'=='AutoCAD+Civil2020'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
 </Project>

@@ -11,6 +11,19 @@ namespace LiraToRevit.Rebar
     public enum Face { Top, Bottom }
     public enum Dir { X, Y }
 
+    /// <summary>Форма верхней допки у кромки плиты — выбирается пользователем В КАРТОЧКЕ ЗОНЫ
+    /// (см. ZoneDef.ShapeMode), не глобально: разные зоны одной плиты могут гнуться по-разному.
+    /// Действует только пока включён глобальный переключатель PlacementSettings.BendTopBars —
+    /// если он выключен ("Прямые верхние стержни"), гибка не делается вообще, независимо от
+    /// ShapeMode отдельных зон (см. RebarPlacer.PlaceBand).</summary>
+    public enum TopBarShapeMode
+    {
+        Auto,       // П у пилона/колонны (SupportDetector.HasParallelSupport), иначе Г
+        Straight,   // эта зона — без загиба, даже если у кромки обрезана (ручной оверрайд зоны)
+        LShape,     // всегда Г-образная
+        UShape      // всегда П-образная
+    }
+
     /// <summary>Подтверждённая зона допармирования (одна на один слой).</summary>
     public class ZoneDef
     {
@@ -30,6 +43,10 @@ namespace LiraToRevit.Rebar
         // попытка сдвинуть исходные координаты ДО создания перебивается привязкой к сетке
         // изолиний (NearestIsoline) и другими пересчётами внутри BarLengthCalculator.
         public bool NeedsAcrossShift;
+
+        /// <summary>Форма загиба у кромки для ЭТОЙ конкретной зоны (только Face.Top) — выбор
+        /// пользователя в карточке зоны редактора, см. TopBarShapeMode. По умолчанию Auto.</summary>
+        public TopBarShapeMode ShapeMode = TopBarShapeMode.Auto;
     }
 
     public class PlacementSettings
@@ -40,6 +57,7 @@ namespace LiraToRevit.Rebar
         /// <summary>Отступ от торца плиты / края отверстия до центра (оси) конца стержня, мм
         /// (вдоль стержня). Кривая стержня в Rebar API — осевая линия, это расстояние до центра.</summary>
         public double EndOffset = 20.0;
+
 
         /// <summary>Длина анкеровки за границы зоны: 55d, мм.</summary>
         public Dictionary<int, double> Anchorage = new Dictionary<int, double>
@@ -65,7 +83,7 @@ namespace LiraToRevit.Rebar
         public Dir FirstLayer = Dir.X;
 
         /// <summary>Диаметр фоновой (основной) арматуры, мм — задаёт отступ доп. арматуры от
-        /// защитного слоя (см. RebarPlacer.BarElevation). Приходит из HTML (выбор "Фоновая арматура" в
+        /// защитного слоя (см. RebarBuilder.ZAt). Приходит из HTML (выбор "Фоновая арматура" в
         /// настройках редактора зон), 10 мм — запасное значение по умолчанию.</summary>
         public double FirstLayerThickness = 10.0;
 
@@ -84,7 +102,13 @@ namespace LiraToRevit.Rebar
         // ── Г/П-образные стержни у края плиты (только верхняя допка, Face.Top) ──────────
         // Стержень, обрезаемый краем плиты (ClipAlong → clipped1/clipped2), вместо укорачивания
         // с пометкой "требуется загиб" получает реальный загиб: по умолчанию Г-образный, а если
-        // у этого края обнаружен пилон/колонна, параллельные грани плиты — П-образный.
+        // у этого края обнаружен пилон/колонна, параллельные грани плиты — П-образный. Форма
+        // (П/Г/прямая) конкретной зоны — ZoneDef.ShapeMode, ниже только общий выключатель.
+
+        /// <summary>Глобальный переключатель "⚙ Настройки → Загнутые/Прямые верхние стержни" —
+        /// главнее выбора формы отдельной зоны (ZoneDef.ShapeMode): false — гибки нет вообще ни
+        /// у одной зоны, независимо от того, что выбрано в её карточке. См. RebarPlacer.PlaceBand.</summary>
+        public bool BendTopBars = true;
 
         /// <summary>Имя формы для Г-образного стержня (носик BI_B).</summary>
         public string LShapeName = "(форма)11";

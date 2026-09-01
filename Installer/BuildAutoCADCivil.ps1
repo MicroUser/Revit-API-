@@ -4,11 +4,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $root    = Split-Path $PSScriptRoot -Parent
-$iscc    = if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
-               "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-           } else {
-               "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-           }
+$isccCandidates = @(
+    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+    "C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe"
+)
+$iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) { $iscc = $isccCandidates[0] }
 $issFile = "$PSScriptRoot\AutoCAD_Civil.iss"
 
 if (-not (Test-Path $iscc)) {
