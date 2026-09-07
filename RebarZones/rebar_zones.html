@@ -7,7 +7,18 @@
   --bg:#14171c; --panel:#1b2027; --panel2:#20262f; --line:#2c343f;
   --tx:#dde4ec; --tx2:#8b96a5; --tx3:#5c6673;
   --amber:#ffb020; --red:#ff4d5e; --green:#3ecf8e; --blue:#4da3ff;
+  --glass:rgba(20,23,28,.9); --glass2:rgba(27,32,39,.93);
   --mono:ui-monospace,'Cascadia Code','JetBrains Mono',Consolas,monospace;
+}
+/* Дневная тема — только базовая "хромовая" палитра (фон/панели/текст) и акцентные цвета
+   (нужны потемнее — на белом фоне исходные яркие amber/red/green/blue почти нечитаемы как
+   текст). Цвета диаметров (KC в скрипте) и цветные бейджи/плашки статусов — НЕ трогаем: это
+   смысловая раскраска данных, она должна оставаться одинаковой в обеих темах. */
+:root[data-theme="light"]{
+  --bg:#eef0f3; --panel:#ffffff; --panel2:#f2f4f7; --line:#d8dde3;
+  --tx:#1b2027; --tx2:#5b6572; --tx3:#8b96a5;
+  --amber:#a35f00; --red:#c62e3f; --green:#1f9d6c; --blue:#1f6fd1;
+  --glass:rgba(255,255,255,.85); --glass2:rgba(255,255,255,.92);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
@@ -34,30 +45,38 @@ body{background:var(--bg);color:var(--tx);font-family:'Segoe UI',system-ui,sans-
 #leftCol{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 #cwrap{flex:1;position:relative;min-width:0;min-height:0}
 canvas{display:block;width:100%;height:100%}
-.hudbox{background:rgba(20,23,28,.9);border:1px solid var(--line);border-radius:8px;padding:8px 10px;backdrop-filter:blur(4px)}
+.hudbox{background:var(--glass);border:1px solid var(--line);border-radius:8px;padding:8px 10px;backdrop-filter:blur(4px)}
 /* Плавающие HUD-панели лежат поверх canvas абсолютным позиционированием — без pointer-events:none
    на контейнере пустое место ВНУТРИ панели (отступы между кнопками, вся высота #tools) тоже
    перехватывает клики/hover, и если край зоны (особенно поперечный — от него зависит количество
    стержней, см. edgeHit в скрипте) оказывается под такой панелью, потянуть его мышью невозможно —
    курсор молча остаётся обычным. pointer-events:auto на самих интерактивных элементах внутри
    возвращает им клики, а пустое пространство панели становится "прозрачным" для canvas под ним. */
-#legend{position:absolute;left:12px;top:12px;pointer-events:none}
+#legendCol{position:absolute;left:12px;top:12px;right:230px;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+#legend{align-self:flex-start}
 #legend .row{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;padding:2px 0;color:var(--tx2)}
 .chip{width:14px;height:10px;border-radius:2px;flex:none}
+/* Легенда диаметров — как в ЛИРА: горизонтальная полоска смежных цветных прямоугольников,
+   каждый подписан диаметром снизу (не список строк, а именно цветовая шкала). */
+#diamLegend{display:flex;align-items:flex-start;gap:1px}
+.dseg{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
+.dseg .sw{width:100%;height:18px}
+.dseg .lb{font-family:var(--mono);font-size:10px;color:var(--tx2);padding-top:2px}
+.dseg:first-child .sw{border-radius:3px 0 0 3px}
+.dseg:last-child .sw{border-radius:0 3px 3px 0}
 #tools{position:absolute;right:12px;top:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;width:212px;overflow-y:auto;overflow-x:hidden;padding-right:4px;pointer-events:none}
 #tools::-webkit-scrollbar{width:6px}
 #tools::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
 #tools::-webkit-scrollbar-track{background:transparent}
-.tool{background:rgba(27,32,39,.93);border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px 11px;font-size:12px;cursor:pointer;text-align:left;pointer-events:auto}
+.tool{background:var(--glass2);border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px 11px;font-size:12px;cursor:pointer;text-align:left;pointer-events:auto}
 .tool:hover{border-color:var(--tx3)} .tool.on{border-color:var(--amber);color:var(--amber)}
 .tool:disabled{opacity:.4;cursor:not-allowed}
 #newDiamPick{pointer-events:auto}
-#coords{position:absolute;left:12px;bottom:12px;font-family:var(--mono);font-size:11px;color:var(--tx3);background:rgba(20,23,28,.85);padding:5px 9px;border-radius:6px;border:1px solid var(--line);pointer-events:none}
 #editbar{position:absolute;left:50%;transform:translateX(-50%);top:12px;display:none;gap:6px;align-items:center;pointer-events:none}
 #editbar.on{display:flex}
-#editbar .eb{background:rgba(27,32,39,.95);border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:7px 12px;font-size:12px;cursor:pointer;pointer-events:auto}
+#editbar .eb{background:var(--glass2);border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:7px 12px;font-size:12px;cursor:pointer;pointer-events:auto}
 #editbar .eb.gray{border-color:var(--line);color:var(--tx2)}
-#editbar .lbl{font-family:var(--mono);font-size:11px;color:var(--tx2);background:rgba(20,23,28,.9);padding:7px 10px;border-radius:7px;border:1px solid var(--line)}
+#editbar .lbl{font-family:var(--mono);font-size:11px;color:var(--tx2);background:var(--glass);padding:7px 10px;border-radius:7px;border:1px solid var(--line)}
 #side{width:336px;flex:none;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 #side h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--tx2);padding:12px 14px 8px}
 #zfilter{display:flex;gap:4px;padding:0 14px 10px;flex-wrap:wrap}
@@ -102,7 +121,7 @@ canvas{display:block;width:100%;height:100%}
 .sb{font-family:var(--mono);font-size:11px;padding:3px 7px;border-radius:5px;border:1px solid var(--line);background:var(--panel);color:var(--tx2);cursor:pointer}
 .sb:hover{border-color:var(--tx3)}
 .sb.on{border-color:var(--amber);color:var(--amber);font-weight:700}
-.ssel .cap{font-family:var(--mono);font-size:10px;color:var(--tx3);width:100%;margin-top:3px}
+.ssel .cap{font-family:var(--mono);font-size:13px;color:var(--red);font-weight:700;width:100%;margin-top:5px}
 .avgline{display:flex;gap:7px;align-items:center;font-size:12px;color:var(--tx);margin-bottom:8px;cursor:pointer}
 .avgbox{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:8px 9px;margin-bottom:9px}
 .agrid{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11px;margin-bottom:6px}
@@ -126,9 +145,9 @@ canvas{display:block;width:100%;height:100%}
 #settings.open{display:block;animation:sdrop .14s ease-out}
 @keyframes sdrop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 #settings table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px;margin:6px 0}
-#settings td{padding:3px 4px;border-bottom:1px solid #242b34;color:var(--tx2)}
+#settings td{padding:3px 4px;border-bottom:1px solid var(--line);color:var(--tx2)}
 #settings input{width:54px;background:var(--bg);border:1px solid var(--line);color:var(--tx);font-family:var(--mono);font-size:11px;padding:2px 5px;border-radius:4px}
-#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:20px;background:#242b34;border:1px solid var(--line);padding:9px 16px;border-radius:8px;font-size:12px;display:none;pointer-events:none}
+#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:20px;background:var(--panel2);border:1px solid var(--line);padding:9px 16px;border-radius:8px;font-size:12px;display:none;pointer-events:none}
 .hint{font-size:10px;color:var(--tx3);line-height:1.4;margin-top:6px}
 /* Модалка пароля (см. #tResetPlaced) — свой инпут вместо prompt(), т.к. prompt() показывает
    введённый текст открытым текстом (можно скопировать/подсмотреть). */
@@ -154,6 +173,7 @@ canvas{display:block;width:100%;height:100%}
   </div>
   <div id="dirbadge">стержни ‖ X · анкеровка ‖ X</div>
   <button id="loadDxf" style="padding:7px 12px;background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap">📁 DXF</button>
+  <button id="themeToggle" title="Переключить тему" style="padding:7px 10px;background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap">🌙</button>
   <div id="spacer"></div>
   <div id="cover"></div>
   <div id="placehint"></div>
@@ -164,7 +184,10 @@ canvas{display:block;width:100%;height:100%}
   <div id="cwrap">
     <canvas id="cv"></canvas>
     <div id="contourWarn" style="display:none;position:absolute;left:50%;top:12px;transform:translateX(-50%);background:#3d1418;border:1px solid var(--red);color:#ff9aa3;padding:8px 14px;border-radius:8px;font-size:12px;font-family:var(--mono);z-index:5;white-space:nowrap;pointer-events:none"></div>
-    <div class="hudbox" id="legend"></div>
+    <div id="legendCol">
+      <div class="hudbox" id="diamLegend"></div>
+      <div class="hudbox" id="legend"></div>
+    </div>
     <div id="editbar">
       <span class="lbl" id="ebname"></span>
       <button class="eb" id="ebDone">Готово</button>
@@ -221,7 +244,6 @@ canvas{display:block;width:100%;height:100%}
         <button class="tool" id="tResetPlaced" style="border-color:var(--red);color:#ff9aa3">🔒 Сбросить память размещения</button>
       </div>
     </div>
-    <div id="coords">x — · y —</div>
     <div id="toast"></div>
     <div id="pwOverlay">
       <div id="pwBox">
@@ -476,6 +498,8 @@ let OPENINGS=[];         // крупные проёмы (≥1000×1000мм, из
 let GRIDS=[];            // оси проекта (из Revit) — фон для наглядности
 let SUPPORTS=[];         // пилоны/колонны у плиты (см. RebarZonesCommand.GetSupports) — заливкой
                          // синим: та же геометрия решает П vs Г при загибе (SupportDetector)
+let CAPITALS=[];         // капители под колоннами — отдельные элементы Floor рядом/под основной
+                         // плитой (см. RebarZonesCommand.GetCapitals) — оранжевым штрихпунктиром
 let ISO_X=[],ISO_Y=[];   // «изолинии» — сетка допармирования (середины пролётов осн. арматуры), м
 function computeBounds(){
   X1=1e9;Y1=1e9;X2=-1e9;Y2=-1e9;
@@ -724,6 +748,11 @@ window.addEventListener('load',()=>{try{window.focus();}catch(_){}});
 cv.addEventListener('pointerdown',()=>{try{window.focus();}catch(_){}});
 // interaction state
 let sel=new Set(),hoverZ=-1,editZ=-1,drag=null,panP=null,newMode=false,newRect=null;
+// Выбор рамкой (как в Revit/AutoCAD): тянем от пустого места — слева направо (мировые
+// координаты не отражены по X) захватывает только ПОЛНОСТЬЮ попавшие зоны (окно, сплошная
+// синяя рамка), справа налево — любые ПЕРЕСЕКАЮЩИЕ рамку (секущая, зелёный пунктир). Панорама
+// левой кнопкой с пустого места убрана (конфликтовала с рамкой) — теперь это средняя кнопка.
+let boxSel=null,boxSelAdd=false;
 // Создание новой зоны — сначала выбор диаметра (pickingDiam, панель newDiamPick), потом рисование
 // рамки (newMode, как раньше): чтобы не приходилось поправлять диаметр ПОСЛЕ авто-подбора по
 // максимуму КЭ внутри рамки — пользователь явно указывает его заранее.
@@ -754,9 +783,9 @@ function edgeHit(px,py){if(editZ<0)return null;const z=zones[editZ];
 // центрирование средней кнопкой (колесо)
 cv.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});
 cv.addEventListener('pointerdown',e=>{
-  if(e.button===1){e.preventDefault();const t=performance.now();
+  if(e.button===1){e.preventDefault();cv.setPointerCapture(e.pointerId);const t=performance.now();
     if(t-lastMid<400){lastMid=0;fitAll();}else{lastMid=t;}
-    return;}
+    drag={mode:'pan'};panP=[e.offsetX,e.offsetY];return;}
   cv.setPointerCapture(e.pointerId);const px=e.offsetX,py=e.offsetY;
   if(newMode){const [x,y]=snapPoint(WX(px),WY(py));
     newRect={x1:x,y1:y,x2:x,y2:y};drag={mode:'new'};return;}
@@ -784,16 +813,16 @@ cv.addEventListener('pointerdown',e=>{
   if(zi>=0){if(e.ctrlKey||e.metaKey){sel.has(zi)?sel.delete(zi):sel.add(zi);}else{sel.clear();sel.add(zi);}
     if(editZ>=0&&editZ!==zi)editZ=-1;
     sync();drag={mode:'maybe'};panP=[px,py];}
-  else{if(!e.ctrlKey){sel.clear();editZ=-1;sync();}drag={mode:'pan'};panP=[px,py];}});
+  else{const [wx,wy]=[WX(px),WY(py)];boxSel={x1:wx,y1:wy,x2:wx,y2:wy};boxSelAdd=e.ctrlKey;drag={mode:'boxsel'};}});
 cv.addEventListener('dblclick',e=>{
   if(copyMode)return;   // не входить в режим формы — второй клик двойного клика уже поставил копию
   const zi=zAt(WX(e.offsetX),WY(e.offsetY));
   if(zi>=0){sel.clear();sel.add(zi);editZ=zi;sync();toast('Режим формы: тяните рёбра.');}});
 cv.addEventListener('pointermove',e=>{const px=e.offsetX,py=e.offsetY;
-  document.getElementById('coords').textContent='x '+WX(px).toFixed(2)+' · y '+WY(py).toFixed(2)+' м';
   if(copyMode&&copySrc){copyPt=snapPoint(WX(px),WY(py));cv.style.cursor='crosshair';draw();return;}
   if(drag&&drag.mode==='new'){const [x,y]=snapPoint(WX(px),WY(py));
     newRect.x2=x;newRect.y2=y;draw();return;}
+  if(drag&&drag.mode==='boxsel'){boxSel.x2=WX(px);boxSel.y2=WY(py);cv.style.cursor='crosshair';draw();return;}
   if(drag&&drag.mode==='edge'){const z=zones[editZ],eg=drag.e,p=z.poly;
     const i1=eg.i,i2=(eg.i+1)%p.length;
     // Перетаскивание вертикального ребра меняет X, горизонтального — Y; какое из них «вдоль»
@@ -812,6 +841,18 @@ cv.addEventListener('pointermove',e=>{const px=e.offsetX,py=e.offsetY;
   const h=zAt(WX(px),WY(py));if(h!==hoverZ){hoverZ=h;draw();}});
 cv.addEventListener('pointerup',()=>{
   if(drag&&drag.mode==='edge'){drag=null;if(absorbNested()){recompute();sync();}return;}
+  if(drag&&drag.mode==='boxsel'&&boxSel){const r=boxSel;
+    const dxPix=Math.abs(SX(r.x2)-SX(r.x1)),dyPix=Math.abs(SY(r.y2)-SY(r.y1));
+    const rightward=r.x2>=r.x1,add=boxSelAdd;
+    boxSel=null;drag=null;
+    if(dxPix<4&&dyPix<4){if(!add){sel.clear();editZ=-1;}sync();return;}
+    const x1=Math.min(r.x1,r.x2),x2=Math.max(r.x1,r.x2),y1=Math.min(r.y1,r.y2),y2=Math.max(r.y1,r.y2);
+    if(!add)sel.clear();
+    zones.forEach((z,i)=>{if(z.state==='rejected')return;const b=bbox(z.poly);
+      const hit=rightward?(b.x1>=x1&&b.x2<=x2&&b.y1>=y1&&b.y2<=y2)   // окно — только целиком внутри
+                          :(b.x2>=x1&&b.x1<=x2&&b.y2>=y1&&b.y1<=y2); // секущая — любое пересечение
+      if(hit)sel.add(i);});
+    editZ=-1;sync();return;}
   if(drag&&drag.mode==='new'&&newRect){const r=newRect;
     const x1=Math.min(r.x1,r.x2),x2=Math.max(r.x1,r.x2),y1=Math.min(r.y1,r.y2),y2=Math.max(r.y1,r.y2);
     newRect=null;drag=null;
@@ -952,11 +993,27 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
       ctx.fillStyle='rgba(20,23,28,.72)';ctx.fillRect(tx-3,ty-2,tw,13);
       ctx.fillStyle=kc;ctx.fillText(z.id,tx,ty);}
     if(isEd){ctx.fillStyle='#ffb020';edgesOf(z).forEach(e=>{ctx.fillRect(SX(e.mx)-4,SY(e.my)-4,8,8);});}});
+  // капители (утолщения плиты под колоннами — отдельные элементы Floor рядом/под основной
+  // плитой, см. RebarZonesCommand.GetCapitals) — ПОВЕРХ ячеек и зон (иначе заливка зоны/КЭ
+  // перекрывает контур капители и его не видно), ярко-зелёным штрихпунктиром — оранжевый
+  // терялся на фоне жёлто-оранжевых ячеек.
+  CAPITALS.forEach(cp=>{if(cp.length<2)return;ctx.beginPath();
+    cp.forEach((p,j)=>j?ctx.lineTo(SX(p[0]),SY(p[1])):ctx.moveTo(SX(p[0]),SY(p[1])));
+    ctx.closePath();ctx.setLineDash([10,3,2,3]);ctx.lineWidth=2;
+    ctx.strokeStyle='#39ff14';ctx.globalAlpha=.95;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);});
   if(newRect){const r=newRect;ctx.setLineDash([5,4]);ctx.lineWidth=1.6;ctx.strokeStyle='#3ecf8e';
     ctx.strokeRect(SX(Math.min(r.x1,r.x2)),SY(Math.max(r.y1,r.y2)),Math.abs(r.x2-r.x1)*scale,Math.abs(r.y2-r.y1)*scale);
     ctx.setLineDash([]);ctx.fillStyle='#3ecf8e';ctx.font='11px ui-monospace,Consolas,monospace';ctx.textAlign='left';
     ctx.fillText(Math.round(Math.abs(r.x2-r.x1)*1000)+' × '+Math.round(Math.abs(r.y2-r.y1)*1000)+' мм',
       SX(Math.min(r.x1,r.x2))+4,SY(Math.max(r.y1,r.y2))-6);}
+  // Рамка выбора: слева направо — окно (сплошная синяя, только целиком попавшие зоны),
+  // справа налево — секущая (зелёный пунктир, как в AutoCAD/Revit).
+  if(boxSel){const r=boxSel,rightward=r.x2>=r.x1,col=rightward?'#4da3ff':'#3ecf8e',
+      x=SX(Math.min(r.x1,r.x2)),y=SY(Math.max(r.y1,r.y2)),
+      w=Math.abs(r.x2-r.x1)*scale,h=Math.abs(r.y2-r.y1)*scale;
+    ctx.save();ctx.setLineDash(rightward?[]:[5,4]);ctx.lineWidth=1.4;ctx.strokeStyle=col;
+    ctx.fillStyle=col;ctx.globalAlpha=.12;ctx.fillRect(x,y,w,h);
+    ctx.globalAlpha=1;ctx.strokeRect(x,y,w,h);ctx.restore();}
   if(copyMode&&copySrc&&copyPt){
     const b=bbox(copySrc.poly),cx=(b.x1+b.x2)/2,cy=(b.y1+b.y2)/2,dx=copyPt[0]-cx,dy=copyPt[1]-cy;
     const poly=copySrc.poly.map(p=>[p[0]+dx,p[1]+dy]);
@@ -965,15 +1022,19 @@ function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cv.clientWid
     ctx.stroke();ctx.globalAlpha=.18;ctx.fillStyle=KC[copySrc.k]||'#3ecf8e';ctx.fill();ctx.restore();ctx.setLineDash([]);}
 }
 // ── UI ──
+// Легенда цвет→диаметр — статическая справка: не зависит от того, сколько зон какого диаметра
+// создано (раньше неиспользуемые диаметры гасли (opacity), из-за чего было непонятно, что цвет
+// вообще значит, пока не появится хотя бы одна зона такого диаметра). Меняется только вместе
+// со шкалой диаметров (curKORD — foundation/обычная плита), не с zones.
+function renderDiamLegend(){
+  const seg=(color,label)=>'<div class="dseg"><span class="sw" style="background:'+color+'"></span><span class="lb">'+label+'</span></div>';
+  const rows=curKORD().map(k=>seg(KC[k],k===SPEC_K?'СПЕЦ':'d'+DIAM[k])).join('');
+  document.getElementById('diamLegend').innerHTML=seg('#3a4250','фон')+rows;}
 function renderLegend(){
   const act=zones.filter(z=>z.state!=='rejected');
-  const rows=curKORD().map(k=>{const n=act.filter(z=>z.k===k).length;
-    return '<div class="row"'+(n?'':' style="opacity:.35"')+'><span class="chip" style="background:'+KC[k]+'"></span>'+
-      KL[k]+' · '+n+'</div>';}).join('');
   document.getElementById('legend').innerHTML=
   '<div class="row"><span class="chip" style="background:#3a4250"></span><span id="lgBg">фон s'+curBGs()+'d'+curBGd()+' ('+capBG()+')</span></div>'+
-  rows+
-  '<div class="row" style="margin-top:4px;color:#8b96a5">всего зон: '+act.length+' · КЭ с допкой: '+cells.filter(needAdd).length+'</div>'+
+  '<div class="row" style="color:#8b96a5">всего зон: '+act.length+' · КЭ с допкой: '+cells.filter(needAdd).length+'</div>'+
   '<div class="row"><span class="chip" style="background:none;border:1.5px solid #ff4d5e"></span>КЭ без покрытия</div>'+
   '<div class="row" style="margin-top:5px;border-top:1px solid #2c343f;padding-top:5px"><span class="chip" style="background:none;border:1.5px dashed #8b96a5"></span>предложена</div>'+
   '<div class="row"><span class="chip" style="background:#8b96a5;border:1.5px solid #8b96a5"></span>принята</div>';}
@@ -1162,12 +1223,9 @@ function renderCard(){const el=document.getElementById('zcard');
   (()=>{const bb2=barBands(z);if(!bb2.length||!DIAM[z.k])return '';
      const x1=Math.min(...bb2.map(t=>t.x1)),x2=Math.max(...bb2.map(t=>t.x2));
      return '<span>С анкеровкой</span><i>'+Math.round((x2-x1)*1000)+' × '+Math.round((b.y2-b.y1)*1000)+' мм</i>';})()+
-  '<span>Вершин</span><i>'+z.poly.length+(z.poly.length>4?' (Г/П-форма)':' (прямоугольник)')+'</i>'+
-  (z.how?'<span>Источник</span><i>'+z.how+'</i>':'<span>Источник</span><i>расчёт</i>')+
   (z.absorb?'<span>Поглотила</span><i>'+z.absorb.join(', ')+'</i>':'')+
   '<span>Aₛ max</span><i>'+z.am+' см²/м</i>'+
-  '<span>Тип</span><i style="font-size:10px">плита_доп_'+(CTX.face==='bottom'?'Н':'В')+CTX.dir+'_d='+DIAM[z.k]+'_А500</i>'+
-  '<span>Анкеровка</span><i>‖'+CTX.dir.toUpperCase()+', lₐ '+(LA[DIAM[z.k]]||'—')+' мм</i></div>'+
+  '<span>Анкеровка</span><i>'+(LA[DIAM[z.k]]||'—')+' мм</i></div>'+
   '<div class="ksel">'+curKORD().map(k=>'<button class="kb'+(z.k===k?' on':'')+'" data-k="'+k+'" style="--kc:'+KC[k]+'">'+(k===SPEC_K?'СПЕЦ':'d'+DIAM[k])+'</button>').join('')+
     (z.k!==z.k0?'<span class="ovr">изменён вручную (расчёт: '+(z.k0===SPEC_K?'СПЕЦ':'d'+DIAM[z.k0])+')</span>':'')+'</div>'+
   (()=>{const d=DIAM[z.k];if(!d)return '';const la=LA[d]||600,bb2=barBands(z);
@@ -1216,7 +1274,7 @@ function avgPanel(z){const c=avgCheck(z);
 function sync(){document.getElementById('tMergeB').disabled=sel.size<2;
   const bar=document.getElementById('editbar');bar.classList.toggle('on',editZ>=0);
   if(editZ>=0)document.getElementById('ebname').textContent='форма '+zones[editZ].id;
-  renderTabs();renderList();renderCard();buildWarnings();renderLegend();renderContourWarn();draw();}
+  renderTabs();renderList();renderCard();buildWarnings();renderDiamLegend();renderLegend();renderContourWarn();draw();}
 // Видимое ПРЯМО в холсте предупреждение о расхождении контура (см. CONTOUR_MISMATCH) — раньше
 // было видно только маленьким значком на вкладке и один раз при загрузке (нативный TaskDialog
 // от C#, легко пропустить/закрыть) — теперь баннер держится, пока не заменят файл этой вкладки.
@@ -1325,6 +1383,25 @@ document.getElementById('loadDxf').onclick=()=>{
   }else{
     toast('Демо (нет связи с Revit): выбор DXF недоступен вне Revit');
   }
+};
+// Тема — ночная (по умолчанию, как раньше) / дневная. Меняет только базовую хром-палитру
+// (:root[data-theme="light"], см. CSS) — цвета диаметров и цветные бейджи статусов сознательно
+// не трогаем: это раскраска данных, она должна читаться одинаково в обеих темах. Выбор
+// запоминается в этом браузере (WebView2 каждой плиты — свой профиль), не зависит от Revit.
+const THEME_KEY='rebarZonesTheme';
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  document.getElementById('themeToggle').textContent=t==='light'?'☀':'🌙';
+}
+(function initTheme(){
+  let saved='dark';
+  try{saved=localStorage.getItem(THEME_KEY)||'dark';}catch(_){}
+  applyTheme(saved);
+})();
+document.getElementById('themeToggle').onclick=()=>{
+  const next=document.documentElement.getAttribute('data-theme')==='light'?'dark':'light';
+  applyTheme(next);
+  try{localStorage.setItem(THEME_KEY,next);}catch(_){}
 };
 // Свой ввод пароля вместо prompt(): prompt() показывает набираемый текст открытым текстом
 // (можно подсмотреть/скопировать) — этот пароль сам по себе не настоящая защита (виден в
@@ -1456,7 +1533,7 @@ function switchTab(key){
   REDO.length=0;ds.redo.forEach(h=>REDO.push(h));
   CTX.face=ds.face;CTX.dir=ds.dir;
   ACTIVE_KEY=key;
-  sel.clear();editZ=-1;drag=null;newRect=null;newMode=false;pickingDiam=false;newDiam=null;copyMode=false;copySrc=null;copyPt=null;setNewBtn();
+  sel.clear();editZ=-1;drag=null;newRect=null;boxSel=null;newMode=false;pickingDiam=false;newDiam=null;copyMode=false;copySrc=null;copyPt=null;setNewBtn();
   fitted=false;
   computeBounds();
   document.getElementById('dirbadge').textContent='стержни ‖ '+CTX.dir.toUpperCase()+' · анкеровка ‖ '+CTX.dir.toUpperCase();
@@ -1511,6 +1588,7 @@ window.loadState=function(json){
   FLOOR_OUTLINE=payload.floorOutline||[];
   OPENINGS=payload.openings||[];
   SUPPORTS=payload.supports||[];
+  CAPITALS=payload.capitals||[];
   GRIDS=payload.grids||[];
   ISO_X=(payload.isolines&&payload.isolines.xs)||[];
   ISO_Y=(payload.isolines&&payload.isolines.ys)||[];

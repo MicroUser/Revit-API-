@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
@@ -112,15 +113,32 @@ namespace LiraToRevit.Rebar
 
         /// <summary>Имя формы для Г-образного стержня (носик BI_B).</summary>
         public string LShapeName = "(форма)11";
-        /// <summary>Длина носика Г-образного стержня, мм (BI_B).</summary>
-        public double LShapeNoseMm = 120.0;
 
         /// <summary>Имя формы для П-образного стержня (BI_B — уход вглубь плиты, BI_C — короткая нога).</summary>
         public string UShapeName = "(форма)21";
-        /// <summary>Длина части, уходящей вглубь плиты, мм (BI_B).</summary>
-        public double UShapeDepthMm = 140.0;
-        /// <summary>Длина короткой ноги на конце, мм (BI_C).</summary>
+        /// <summary>Длина короткой ноги П-образного стержня на конце, мм (BI_C) — не зависит от
+        /// толщины плиты, в отличие от носика Г/глубины П ниже.</summary>
         public double UShapeFootMm = 500.0;
+
+        /// <summary>Носик Г-образного стержня (BI_B) и глубина ухода П-образного вглубь плиты
+        /// (BI_B), мм — зависят от толщины плиты: чем толще плита, тем больше должен быть загиб.
+        /// Ключ — толщина плиты, мм; значение — (носик Г, глубина П). Для толщины, которой нет в
+        /// таблице, берётся ближайшая по значению запись (см. BendSizesFor) — не интерполяция и
+        /// не жёсткий дефолт, а самая близкая реально протабулированная толщина.</summary>
+        public Dictionary<int, (double NoseMm, double DepthMm)> BendSizesByThicknessMm =
+            new Dictionary<int, (double NoseMm, double DepthMm)>
+            {
+                { 200, (120.0, 140.0) },
+                { 250, (180.0, 180.0) },
+                { 300, (230.0, 230.0) },    
+            };
+
+        /// <summary>Носик Г/глубина П для плиты заданной толщины — см. BendSizesByThicknessMm.</summary>
+        public (double NoseMm, double DepthMm) BendSizesFor(double thicknessMm)
+        {
+            int bestKey = BendSizesByThicknessMm.Keys.OrderBy(k => Math.Abs(k - thicknessMm)).First();
+            return BendSizesByThicknessMm[bestKey];
+        }
 
         /// <summary>Параметр сборки со списком категорий её состава (автозаполняемый Revit'ом
         /// при именовании сборки) — ловит любую сборку из стен/несущих колонн.</summary>

@@ -411,6 +411,42 @@ namespace LiraToRevit.Rebar
             return null;
         }
 
+        /// <summary>Допуск по высоте при поиске капителей под этой плитой, мм — капитель
+        /// (утолщение плиты под колонной) обычно уходит вниз от подошвы основной плиты на
+        /// величину своего собственного утолщения, не только строго в её пределах по Z.</summary>
+        private const double CapitalZToleranceMm = 600.0;
+
+        /// <summary>
+        /// Капители под колоннами — в этом проекте они выполнены ОТДЕЛЬНЫМ элементом Floor рядом
+        /// с основной плитой (не частью её собственной геометрии), поэтому в контур плиты
+        /// (GetFloorOutlineAndOpenings) не попадают вообще. Визуальный фон в редакторе — те же
+        /// принципы фильтрации, что и GetSupports (допуск по высоте + по плану, иначе показывались
+        /// бы капители вообще всех колонн проекта, а не только те, что реально под этой плитой).
+        /// </summary>
+        private static List<List<XYZ>> GetCapitals(Document doc, Floor floor)
+        {
+            var res = new List<List<XYZ>>();
+            var floorBb = floor.get_BoundingBox(null);
+            if (floorBb == null) return res;
+
+            double zTolFt = UnitUtils.ConvertToInternalUnits(CapitalZToleranceMm, UnitTypeId.Millimeters);
+            double xyTolFt = UnitUtils.ConvertToInternalUnits(SupportPlanToleranceMm, UnitTypeId.Millimeters);
+
+            foreach (Floor f in new FilteredElementCollector(doc).OfClass(typeof(Floor)).Cast<Floor>())
+            {
+                if (f.Id == floor.Id) continue;
+                var bb = f.get_BoundingBox(null);
+                if (bb == null) continue;
+                if (bb.Max.Z < floorBb.Min.Z - zTolFt || bb.Min.Z > floorBb.Max.Z + zTolFt) continue;
+                if (bb.Max.X < floorBb.Min.X - xyTolFt || bb.Min.X > floorBb.Max.X + xyTolFt) continue;
+                if (bb.Max.Y < floorBb.Min.Y - xyTolFt || bb.Min.Y > floorBb.Max.Y + xyTolFt) continue;
+
+                var (outline, _) = GetFloorOutlineAndOpenings(f);
+                if (outline.Count > 1) res.Add(outline);
+            }
+            return res;
+        }
+
         /// <summary>
         /// Грубая сверка "тот ли DXF выбран для этой плиты" для набора датасетов сразу — площадь
         /// габарита контура плиты в Revit против площади габарита мозаики КЭ из DXF (см.
@@ -470,6 +506,7 @@ namespace LiraToRevit.Rebar
             var (outline, openings) = GetFloorOutlineAndOpenings(floor);
             var grids = GetGrids(doc, floor);
             var supports = GetSupports(doc, floor);
+            var capitals = GetCapitals(doc, floor);
             var isolines = SlabGeometry.From(doc, floor).BuildIsolines();
             var placedHistory = RebarZonesDataStore.LoadPlaced(doc, floor);
             string savedZonesJson = RebarZonesDataStore.LoadZonesJson(doc, floor);
@@ -531,9 +568,12 @@ namespace LiraToRevit.Rebar
                 // Крупные проёмы (≥1000×1000мм) — см. GetFloorOutlineAndOpenings. Нужны редактору,
                 // чтобы не рисовать анкеровку "сквозь" проём, где стержень в реальности обрывается.
                 openings = openings.Select(op => op.Select(p => new[] { Math.Round(M(p.X), 4), Math.Round(M(p.Y), 4) }).ToArray()).ToArray(),
-                // Пилоны/колонны у этой плиты (см. GetSupports) — серым пунктиром на фоне: та же
+                // Пилоны/колонны у этой плиты (см. GetSupports) — синей заливкой на фоне: та же
                 // геометрия, что решает П vs Г при загибе (SupportDetector.HasParallelSupport).
                 supports = supports.Select(op => op.Select(p => new[] { Math.Round(M(p.X), 4), Math.Round(M(p.Y), 4) }).ToArray()).ToArray(),
+                // Капители под колоннами (см. GetCapitals) — отдельные элементы Floor рядом/под
+                // основной плитой, ярко-зелёным штрихпунктиром ПОВЕРХ зон и ячеек на фоне.
+                capitals = capitals.Select(op => op.Select(p => new[] { Math.Round(M(p.X), 4), Math.Round(M(p.Y), 4) }).ToArray()).ToArray(),
                 grids = grids.Select(g => new
                 {
                     name = g.Name,

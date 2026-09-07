@@ -76,10 +76,12 @@ namespace LiraToRevit.Rebar
         /// (плана BentBarPlan) до ближнего — общая часть для обычной раскладки бендового случая и
         /// ближнего массива при делении длинной зоны (см. BarLengthCalculator.ComputeBentSplit).
         /// useU/shape — уже решено снаружи (см. RebarPlacer — выбор формы зависит от пилонов/колонн,
-        /// это не задача построителя).</summary>
+        /// это не задача построителя). bendMm — носик Г / глубина П (BI_B), уже подобранный
+        /// снаружи по толщине плиты (см. PlacementSettings.BendSizesFor) — построитель не решает,
+        /// какая толщина у какой плиты, только получает готовое значение.</summary>
         public Autodesk.Revit.DB.Structure.Rebar CreateBentRebarElement(
             Floor host, ZoneDef z, RebarBarType type, string mark, bool useU, RebarShape shape, BentBarPlan plan,
-            double first, double zBar, int count, double step)
+            double first, double zBar, int count, double step, double bendMm)
         {
             XYZ farPt = PointOf(z.Dir, plan.FarAlong, first, zBar);
             XYZ nearPt = PointOf(z.Dir, plan.NearAlong, first, zBar);
@@ -92,7 +94,7 @@ namespace LiraToRevit.Rebar
             // параметры (а при смене формы после создания их местами меняет сам Revit — этого
             // тоже избегаем).
             var curves = new List<Curve> { Line.CreateBound(farPt, nearPt) };
-            XYZ depthPt = nearPt - XYZ.BasisZ.Multiply(RebarUnits.Mm(useU ? _s.UShapeDepthMm : _s.LShapeNoseMm));
+            XYZ depthPt = nearPt - XYZ.BasisZ.Multiply(RebarUnits.Mm(bendMm));
             curves.Add(Line.CreateBound(nearPt, depthPt));
             if (useU)
             {
@@ -120,10 +122,10 @@ namespace LiraToRevit.Rebar
             // точные целевые значения принудительно.
             if (useU)
                 FixShapeParams(rebar, new[] { "BI_A", "BI_B", "BI_C" },
-                    new[] { plan.MainLenMm, _s.UShapeDepthMm, _s.UShapeFootMm });
+                    new[] { plan.MainLenMm, bendMm, _s.UShapeFootMm });
             else
                 FixShapeParams(rebar, new[] { "BI_A", "BI_B" },
-                    new[] { plan.MainLenMm, _s.LShapeNoseMm });
+                    new[] { plan.MainLenMm, bendMm });
 
             WriteParams(rebar, z, false, mark);
             string shapeNote = useU

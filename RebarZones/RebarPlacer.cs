@@ -241,7 +241,15 @@ namespace LiraToRevit.Rebar
                 : z.ShapeMode == TopBarShapeMode.LShape ? false
                 : _uShape != null && _supportDetector.HasParallelSupport(slab, z.Dir, first, step, count, edgeNearAlong, zAtBend);
             RebarShape shape = useU ? _uShape : _lShape;
-            double noseTotalMm = useU ? (_s.UShapeDepthMm + _s.UShapeFootMm) : _s.LShapeNoseMm;
+
+            // Носик Г / глубина П — по толщине плиты В МЕСТЕ ЗАГИБА (см. PlacementSettings.
+            // BendSizesFor), не фиксированная константа: толще плита — больше должен быть загиб.
+            double bendXMm = z.Dir == Dir.X ? edgeNearAlong : first;
+            double bendYMm = z.Dir == Dir.X ? first : edgeNearAlong;
+            double thicknessMm = slab.TopZMmAt(bendXMm, bendYMm) - slab.BottomZMmAt(bendXMm, bendYMm);
+            var bendSizes = _s.BendSizesFor(thicknessMm);
+            double bendMm = useU ? bendSizes.DepthMm : bendSizes.NoseMm;
+            double noseTotalMm = useU ? (bendMm + _s.UShapeFootMm) : bendMm;
 
             if (_calculator.NeedsBentSplit(origFarAlong, edgeNearAlong))
             {
@@ -261,7 +269,7 @@ namespace LiraToRevit.Rebar
                 var nearRungs = _builder.ComputeRungs(slab, z, nearAlong1, nearAlong2, first, step, count);
                 foreach (var rung in nearRungs)
                 {
-                    var rebarB = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, split.Near, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
+                    var rebarB = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, split.Near, rung.AcrossStartMm, rung.ZBar, rung.Count, step, bendMm);
                     _builder.AssignWorkset(rebarB);
                     // Ближний (бендовый) массив сдвигается на 20мм поперёк — см. класс-док
                     // BarLengthCalculator. Применяется к КАЖДОЙ его ступени.
@@ -279,7 +287,7 @@ namespace LiraToRevit.Rebar
             var bentResult = new List<PlacedBars>();
             foreach (var rung in bentRungs)
             {
-                var rebar = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, plan, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
+                var rebar = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, plan, rung.AcrossStartMm, rung.ZBar, rung.Count, step, bendMm);
                 _builder.AssignWorkset(rebar);
                 bentResult.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = plan.TotalLenMm, NeedsHook = false, RebarId = rebar.Id });
             }
