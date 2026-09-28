@@ -561,6 +561,17 @@ namespace LiraToRevit.Rebar
                 catch { bg = null; }
             }
 
+            // Пользовательские цвета зон/легенды по диаметру — тоже общие на весь проект, не на
+            // плиту (см. RebarZonesDataStore.LoadColorsJson), сырой JSON без разбора: редактор сам
+            // сливает {"1":"#rrggbb",...} поверх дефолтной палитры KC (см. rebar_zones.html loadState).
+            object colors = null;
+            string colorsJson = RebarZonesDataStore.LoadColorsJson(doc);
+            if (!string.IsNullOrEmpty(colorsJson))
+            {
+                try { colors = JsonSerializer.Deserialize<JsonElement>(colorsJson); }
+                catch { colors = null; }
+            }
+
             var payload = new
             {
                 datasets = BuildDatasetsPayload(datasets.Select(d => (d.Dxf, d.Face, d.Dir)), floor),
@@ -610,6 +621,9 @@ namespace LiraToRevit.Rebar
                 // Диаметр/шаг фоновой арматуры из прошлого сеанса (см. выше) — если есть, редактор
                 // восстанавливает его поверх дефолтных 10мм/⌀20 для фундамента, см. loadState.
                 bg,
+                // Пользовательские цвета зон/легенды из прошлого сеанса (см. выше) — если есть,
+                // редактор сливает их поверх дефолтной палитры KC, см. loadState.
+                colors,
                 // Фундамент — своя логика фоновой арматуры (верх/низ раздельно, дефолт ⌀20).
                 isFoundation,
                 // Вкладки, где контур плиты и габарит DXF разошлись более чем на 20% (см.

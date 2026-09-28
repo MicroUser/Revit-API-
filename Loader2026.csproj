@@ -59,6 +59,8 @@
     <EmbeddedResource Include="Resources\pencil_16.png" />
     <EmbeddedResource Include="Resources\version-control_32.png" />
     <EmbeddedResource Include="Resources\version-control_16.png" />
+    <EmbeddedResource Include="Resources\swap_32.png" />
+    <EmbeddedResource Include="Resources\swap_16.png" />
   </ItemGroup>
 
   <!-- Dev-деплой отключён по просьбе — падал с ошибкой "занят другим приложением", когда

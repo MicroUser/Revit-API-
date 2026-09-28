@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Плагин Navisworks .NET API — отдельный, независимый от Revit/AutoCAD проект в своей
+       подпапке репозитория, не входит в DAN_Plugin.sln (та же схема, что у AutoCAD+Civil).
+       Navisworks Manage 2025 — .NET Framework 4.8 приложение (подтверждено по
+       Roamer.exe.config: supportedRuntime v4.0 sku=".NETFramework,Version=v4.8"; рядом с
+       Autodesk.Navisworks.Api.dll нет runtimeconfig.json, в отличие от AutoCAD/Revit 2025+,
+       которые уже на .NET 8), поэтому TargetFramework — net48, а не net8.0-windows. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>ClashAutomation</RootNamespace>
+    <AssemblyName>ClashAutomation</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=False — сборка Navisworks НЕ копируется в выходную папку: при загрузке
+         плагина Navisworks резолвит её из уже загруженной в своём процессе версии (та же
+         причина, что и для acmgd/acdbmgd в AutoCAD+Civil.csproj). -->
+    <Reference Include="Autodesk.Navisworks.Api">
+      <HintPath>C:\Program Files\Autodesk\Navisworks Manage 2025\Autodesk.Navisworks.Api.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -140,6 +140,7 @@ namespace LiraToRevit.Rebar
             if (msg.StartsWith("anchorset:")) { AnchorSettingsChanged(msg.Substring("anchorset:".Length)); return; }
             if (msg.StartsWith("topbendset:")) { TopBendSettingChanged(msg.Substring("topbendset:".Length)); return; }
             if (msg.StartsWith("bgset:")) { BgSettingsChanged(msg.Substring("bgset:".Length)); return; }
+            if (msg.StartsWith("colorsset:")) { ColorsChanged(msg.Substring("colorsset:".Length)); return; }
         }
 
         /// <summary>Коэффициент/построчные длины анкеровки поправлены в окне "Настройки" (см.
@@ -164,6 +165,15 @@ namespace LiraToRevit.Rebar
         {
             if (string.IsNullOrEmpty(rawJson)) return;
             _bridge.Run(app => RebarZonesDataStore.SaveTopBendJson(app.ActiveUIDocument.Document, rawJson));
+        }
+
+        /// <summary>Правка цветов зон/легенды (rebar_zones.html KC, панель #colorEdit под
+        /// легендой диаметров на холсте) — сохраняем как есть, по образцу TopBendSettingChanged
+        /// выше, общее на весь проект (см. RebarZonesDataStore.SaveColorsJson).</summary>
+        private void ColorsChanged(string rawJson)
+        {
+            if (string.IsNullOrEmpty(rawJson)) return;
+            _bridge.Run(app => RebarZonesDataStore.SaveColorsJson(app.ActiveUIDocument.Document, rawJson));
         }
 
         /// <summary>Смена диаметра/шага фоновой арматуры в "⚙ Настройки" (rebar_zones.html
@@ -491,6 +501,8 @@ namespace LiraToRevit.Rebar
         public string How;
         public double BgD;   // диаметр фоновой (основной) арматуры, мм — см. PlacementSettings.FirstLayerThickness
         public string Shape; // "auto"/"u"/"l"/"straight" — форма загиба ЭТОЙ зоны, см. ZoneDef.ShapeMode
+        public bool DoubleReinforced; // "Двойное армирование" — см. ZoneDef.DoubleReinforced (только фундаменты)
+        public int Diameter2;         // диаметр второго слоя, мм — см. ZoneDef.Diameter2
         public System.Collections.Generic.List<(double X, double Y)> Poly;
 
         public ZoneDef ToZoneDef(Face face, Dir dir)
@@ -515,6 +527,8 @@ namespace LiraToRevit.Rebar
                 Source = How,
                 Accepted = true,
                 ShapeMode = shapeMode,
+                DoubleReinforced = DoubleReinforced,
+                Diameter2 = Diameter2,
                 Polygon = Poly.Select(p => new XYZ(
                     UnitUtils.ConvertToInternalUnits(p.X, UnitTypeId.Meters),
                     UnitUtils.ConvertToInternalUnits(p.Y, UnitTypeId.Meters),
@@ -545,6 +559,8 @@ namespace LiraToRevit.Rebar
                     How = el.TryGetProperty("how", out var howEl) ? howEl.GetString() : "расчёт",
                     BgD = el.TryGetProperty("bgD", out var bgDEl) ? bgDEl.GetDouble() : 10.0,
                     Shape = el.TryGetProperty("shape", out var shapeEl) ? shapeEl.GetString() : "auto",
+                    DoubleReinforced = el.TryGetProperty("double", out var dblEl) && dblEl.ValueKind == System.Text.Json.JsonValueKind.True,
+                    Diameter2 = el.TryGetProperty("d2", out var d2El) ? d2El.GetInt32() : 0,
                     Poly = new System.Collections.Generic.List<(double, double)>()
                 };
                 foreach (var pt in el.GetProperty("poly").EnumerateArray())

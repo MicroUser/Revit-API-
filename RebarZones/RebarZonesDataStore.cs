@@ -153,6 +153,20 @@ namespace LiraToRevit.Rebar
         public static void SaveTopBendJson(Document doc, string rawJson) =>
             ProjectDataStore.SaveSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), TopBendSectionKey, rawJson);
 
+        private const string ColorsSectionKey = "rebar_zones_colors";
+
+        /// <summary>Пользовательские цвета зон/легенды по диаметру (см. rebar_zones.html KC,
+        /// панель "🎨 Цвета" в "⚙ Настройки") — общие на весь проект, как анкеровка/загиб выше, а
+        /// не per-floor: цвет диаметра — условное обозначение, должно совпадать на всех плитах
+        /// проекта. Сырая JSON-строка (объект {"1":"#rrggbb",...}, ключи — те же k, что в KC) без
+        /// разбора на C#: при открытии окна просто пробрасывается обратно в редактор как есть
+        /// (см. RebarZonesCommand.BuildInitJson), который сам сливает её поверх дефолтной палитры.</summary>
+        public static string LoadColorsJson(Document doc) =>
+            ProjectDataStore.LoadSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), ColorsSectionKey);
+
+        public static void SaveColorsJson(Document doc, string rawJson) =>
+            ProjectDataStore.SaveSection(RevitKJChecklist.ChecklistCommand.GetSavePath(doc), ColorsSectionKey, rawJson);
+
         /// <summary>Диаметр/шаг фоновой (основной) арматуры (см. rebar_zones.html BGd/BGs и
         /// BGdTop/BGsTop/BGdBottom/BGsBottom для фундаментов) — per-floor (см. FloorData.BgSettingsJson):
         /// у разных плит фон может отличаться (у одной d12, у другой d14), в отличие от анкеровки/

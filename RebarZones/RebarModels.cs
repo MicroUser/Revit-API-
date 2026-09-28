@@ -48,6 +48,16 @@ namespace LiraToRevit.Rebar
         /// <summary>Форма загиба у кромки для ЭТОЙ конкретной зоны (только Face.Top) — выбор
         /// пользователя в карточке зоны редактора, см. TopBarShapeMode. По умолчанию Auto.</summary>
         public TopBarShapeMode ShapeMode = TopBarShapeMode.Auto;
+
+        /// <summary>"Двойное армирование" — второй слой той же геометрии (та же длина/обрезка/
+        /// загиб, что и у первого — отличается только диаметром и отметкой), сдвинутый на 50мм по
+        /// оси от первого: для Face.Bottom — выше (глубже в тело плиты от низа), для Face.Top —
+        /// ниже (глубже от верха). Только для фундаментов (карточка зоны — кнопка появляется
+        /// лишь при IS_FOUNDATION), включается вручную — автогенератор зон из DXF её не
+        /// предлагает (см. RebarPlacer.WithDiameter/Place).</summary>
+        public bool DoubleReinforced;
+        /// <summary>Диаметр второго слоя, мм — используется только когда DoubleReinforced=true.</summary>
+        public int Diameter2;
     }
 
     public class PlacementSettings

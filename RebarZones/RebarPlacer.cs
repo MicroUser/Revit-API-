@@ -53,6 +53,13 @@ namespace LiraToRevit.Rebar
             _builder = new RebarBuilder(doc, settings, _worksetId);
         }
 
+        /// <summary>Клон зоны с ДРУГИМ диаметром, только полями, которые читает
+        /// RebarTypeResolver (Face/Dir/Diameter) — нужен, чтобы найти/проверить тип арматуры
+        /// второго слоя двойного армирования (ZoneDef.DoubleReinforced), не имея отдельной
+        /// настоящей зоны под этот диаметр.</summary>
+        private static ZoneDef WithDiameter(ZoneDef z, int diameter) =>
+            new ZoneDef { Face = z.Face, Dir = z.Dir, Diameter = diameter, Accepted = true };
+
         private static WorksetId ResolveWorkset(Document doc, string name)
         {
             if (string.IsNullOrEmpty(name) || !doc.IsWorkshared) return null;
@@ -88,7 +95,12 @@ namespace LiraToRevit.Rebar
 
             _conflictResolver.ResolveLengthOverlaps(accepted);
 
-            var missing = _typeResolver.MissingTypes(accepted);
+            // Двойное армирование (ZoneDef.DoubleReinforced) — второй слой требует СВОЙ тип
+            // (может быть другого диаметра), проверяем оба диаметра до начала размещения, а не
+            // только z.Diameter — иначе размещение начнётся и упадёт на полпути на втором слое.
+            var typeCheckList = accepted.SelectMany(z =>
+                z.DoubleReinforced ? new[] { z, WithDiameter(z, z.Diameter2) } : new[] { z });
+            var missing = _typeResolver.MissingTypes(typeCheckList);
             if (missing.Any())
             {
                 res.Errors.AddRange(missing.Select(m => $"В проекте нет типа {m}"));
@@ -185,6 +197,13 @@ namespace LiraToRevit.Rebar
         {
             var plans = _calculator.ComputeStraight(z, p1, p2, clipped1, clipped2);
 
+            // Двойное армирование (ZoneDef.DoubleReinforced, только фундаменты) — второй слой:
+            // ТА ЖЕ геометрия/длина/шаг, что и у слоя 1 (см. класс-док плана), отличается только
+            // типом (свой диаметр) и отметкой — сдвинут на 50мм по оси от слоя 1, в тело плиты
+            // (Face.Bottom — выше, Face.Top — ниже).
+            RebarBarType type2 = z.DoubleReinforced ? _typeResolver.FindType(WithDiameter(z, z.Diameter2)) : null;
+            double doubleShiftMm = z.Face == Face.Bottom ? 50.0 : -50.0;
+
             var result = new List<PlacedBars>();
             for (int i = 0; i < plans.Count; i++)
             {
@@ -211,6 +230,22 @@ namespace LiraToRevit.Rebar
                         NeedsHook = plan.NeedsHook,
                         RebarId = rebar.Id
                     });
+
+                    if (z.DoubleReinforced)
+                    {
+                        var rebar2 = _builder.CreateStraightRebarElement(host, z, type2, mark, plan, rung.AcrossStartMm, rung.ZBar + doubleShiftMm, rung.Count, step);
+                        _builder.AssignWorkset(rebar2);
+                        if (plans.Count == 2 && i == 1) _builder.ApplyAcrossShift(rebar2.Id, z.Dir);
+                        result.Add(new PlacedBars
+                        {
+                            ZoneId = z.Id,
+                            TypeName = type2.Name,
+                            Count = rung.Count,
+                            LengthMm = plan.LengthMm,
+                            NeedsHook = plan.NeedsHook,
+                            RebarId = rebar2.Id
+                        });
+                    }
                 }
             }
             return result;
@@ -251,6 +286,11 @@ namespace LiraToRevit.Rebar
             double bendMm = useU ? bendSizes.DepthMm : bendSizes.NoseMm;
             double noseTotalMm = useU ? (bendMm + _s.UShapeFootMm) : bendMm;
 
+            // Двойное армирование (см. PlaceStraightBand) — второй слой той же формы/длины/
+            // загиба, свой диаметр/тип, отметка сдвинута на 50мм от слоя 1 в тело плиты.
+            RebarBarType type2 = z.DoubleReinforced ? _typeResolver.FindType(WithDiameter(z, z.Diameter2)) : null;
+            double doubleShiftMm = z.Face == Face.Bottom ? 50.0 : -50.0;
+
             if (_calculator.NeedsBentSplit(origFarAlong, edgeNearAlong))
             {
                 var split = _calculator.ComputeBentSplit(z, origFarAlong, edgeNearAlong, bendAtP2, noseTotalMm);
@@ -262,6 +302,13 @@ namespace LiraToRevit.Rebar
                     var rebarA = _builder.CreateStraightRebarElement(host, z, type, mark, split.Far, rung.AcrossStartMm, rung.ZBar, rung.Count, step);
                     _builder.AssignWorkset(rebarA);
                     result.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = split.Far.LengthMm, NeedsHook = split.Far.NeedsHook, RebarId = rebarA.Id });
+
+                    if (z.DoubleReinforced)
+                    {
+                        var rebarA2 = _builder.CreateStraightRebarElement(host, z, type2, mark, split.Far, rung.AcrossStartMm, rung.ZBar + doubleShiftMm, rung.Count, step);
+                        _builder.AssignWorkset(rebarA2);
+                        result.Add(new PlacedBars { ZoneId = z.Id, TypeName = type2.Name, Count = rung.Count, LengthMm = split.Far.LengthMm, NeedsHook = split.Far.NeedsHook, RebarId = rebarA2.Id });
+                    }
                 }
 
                 double nearAlong1 = Math.Min(split.Near.FarAlong, split.Near.NearAlong);
@@ -275,6 +322,14 @@ namespace LiraToRevit.Rebar
                     // BarLengthCalculator. Применяется к КАЖДОЙ его ступени.
                     _builder.ApplyAcrossShift(rebarB.Id, z.Dir);
                     result.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = split.Near.TotalLenMm, NeedsHook = false, RebarId = rebarB.Id });
+
+                    if (z.DoubleReinforced)
+                    {
+                        var rebarB2 = _builder.CreateBentRebarElement(host, z, type2, mark, useU, shape, split.Near, rung.AcrossStartMm, rung.ZBar + doubleShiftMm, rung.Count, step, bendMm);
+                        _builder.AssignWorkset(rebarB2);
+                        _builder.ApplyAcrossShift(rebarB2.Id, z.Dir);
+                        result.Add(new PlacedBars { ZoneId = z.Id, TypeName = type2.Name, Count = rung.Count, LengthMm = split.Near.TotalLenMm, NeedsHook = false, RebarId = rebarB2.Id });
+                    }
                 }
 
                 return result;
@@ -290,6 +345,13 @@ namespace LiraToRevit.Rebar
                 var rebar = _builder.CreateBentRebarElement(host, z, type, mark, useU, shape, plan, rung.AcrossStartMm, rung.ZBar, rung.Count, step, bendMm);
                 _builder.AssignWorkset(rebar);
                 bentResult.Add(new PlacedBars { ZoneId = z.Id, TypeName = type.Name, Count = rung.Count, LengthMm = plan.TotalLenMm, NeedsHook = false, RebarId = rebar.Id });
+
+                if (z.DoubleReinforced)
+                {
+                    var rebar2 = _builder.CreateBentRebarElement(host, z, type2, mark, useU, shape, plan, rung.AcrossStartMm, rung.ZBar + doubleShiftMm, rung.Count, step, bendMm);
+                    _builder.AssignWorkset(rebar2);
+                    bentResult.Add(new PlacedBars { ZoneId = z.Id, TypeName = type2.Name, Count = rung.Count, LengthMm = plan.TotalLenMm, NeedsHook = false, RebarId = rebar2.Id });
+                }
             }
             return bentResult;
         }

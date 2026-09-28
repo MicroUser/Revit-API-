@@ -64,6 +64,8 @@
     <EmbeddedResource Include="Resources\pencil_16.png" />
     <EmbeddedResource Include="Resources\version-control_32.png" />
     <EmbeddedResource Include="Resources\version-control_16.png" />
+    <EmbeddedResource Include="Resources\swap_32.png" />
+    <EmbeddedResource Include="Resources\swap_16.png" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- Авто-копирование в Addins отключено по просьбе — падало с ошибкой "занят другим

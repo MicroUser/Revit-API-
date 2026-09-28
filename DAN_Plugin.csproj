@@ -126,6 +126,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ElementIdCompat.cs" />
+    <Compile Include="CreateOpeningsFromFamilies.cs" />
+    <Compile Include="ReinforceParapetCommand.cs" />
+    <Compile Include="WallColumnSwapCommand.cs" />
     <Compile Include="AssemblytoElementMark.cs" />
     <Compile Include="Debug.cs" />
     <Compile Include="Опалубка стен\ElevationTag.cs" />
@@ -176,6 +179,10 @@
     <Compile Include="RebarZones\SlabMarkCommand.cs" />
     <Compile Include="RebarZones\SlabMarkDxfPicker.cs" />
     <Compile Include="RebarZones\SlabMarkWindow.cs" />
+    <Compile Include="FoundationStarters\FoundationStarterCommand.cs" />
+    <Compile Include="FoundationStarters\FoundationStarterDiagnostics.cs" />
+    <Compile Include="FoundationStarters\GroupNumberPrompt.cs" />
+    <Compile Include="FoundationStarters\ReinforcementModePrompt.cs" />
     <Compile Include="KzhNotes\NotesCommand.cs" />
     <Compile Include="KzhNotes\NotesEngine.cs" />
     <Compile Include="KzhNotes\NotesLibrary.cs" />

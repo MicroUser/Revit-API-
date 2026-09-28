@@ -138,6 +138,16 @@ namespace MyPlugin.Loader
             btnNotes.LargeImage = LoadIcon("pencil_32.png");
             btnNotes.Image      = LoadIcon("pencil_16.png");
             btnNotes.SetContextualHelp(new ContextualHelp(ContextualHelpType.Url, "https://youtu.be/7AG21HpX1FY"));
+
+            panel.AddSeparator();
+
+            // Стены <-> Колонны: конвертация выбранных стен/колонн/сборок
+            var btnSwap = (PushButton)panel.AddItem(new PushButtonData(
+                "WallColumnSwapCommand", "Стены <->\nКолонны", path,
+                "MyPlugin.Loader.ProxyWallColumnSwapCommand")
+            { LongDescription = "Конвертирует стены в структурные колонны и обратно. Можно выбрать несколько элементов или целую сборку — конвертируются все стены и колонны внутри неё." });
+            btnSwap.LargeImage = LoadIcon("swap_32.png");
+            btnSwap.Image      = LoadIcon("swap_16.png");
         }
 
         private static BitmapSource LoadIcon(string fileName)
@@ -379,5 +389,13 @@ namespace MyPlugin.Loader
     {
         public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
             => HotLoader.Run("KzhNotes.NotesCommand", cd, ref msg, els);
+    }
+
+    [Transaction(TransactionMode.Manual)]
+    [Regeneration(RegenerationOption.Manual)]
+    public class ProxyWallColumnSwapCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData cd, ref string msg, ElementSet els)
+            => HotLoader.Run("DAN_Plugin.WallColumnSwapCommand", cd, ref msg, els);
     }
 }

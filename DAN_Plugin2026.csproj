@@ -29,7 +29,7 @@
          их исходники сюда же (для DxfCleaner/LiraDxfExporter это давало дублирующиеся классы
          App/MainWindow; AutoCAD+Civil ссылается на Autodesk.AutoCAD.* — этих сборок тут нет,
          был бы CS0246). -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**;obj2026\**;bin2026\**;DxfCleaner\**;LiraDxfExporter\**;AutoCAD+Civil\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**;obj2026\**;bin2026\**;DxfCleaner\**;LiraDxfExporter\**;AutoCAD+Civil\**;ClashAutomation\**</DefaultItemExcludes>
     <!-- Revit грузит DLL напрямую (не через "dotnet"), .deps.json он не читает — без этого
          NuGet-зависимости (System.Drawing.Common, System.Resources.Extensions) не попадают
          в выходную папку физически, и плагин упадёт при первом обращении к этим типам. -->
